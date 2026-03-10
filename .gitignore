@@ -1,0 +1,79 @@
+# ======================================================
+# Industrial AI Vision Engineering - .gitignore
+# ======================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# --- Node.js ---
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+.yarn/
+
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+
+# --- Model weights ---
+weights/*.pt
+weights/*.engine
+weights/*.onnx
+*.pt
+*.engine
+*.onnx
+!yolov8n.pt
+
+# --- Data ---
+data/raw/*
+data/annotated/*
+data/augmented/*
+data/prepared/*
+!data/**/.gitkeep
+uploads/
+
+# --- Training runs ---
+runs/
+wandb/
+mlruns/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- DVC ---
+*.dvc
+/dvc.lock
+
+# --- Misc ---
+*.log
+*.tmp
+*.bak
+evaluation_metrics.json
+.last_retrain_marker

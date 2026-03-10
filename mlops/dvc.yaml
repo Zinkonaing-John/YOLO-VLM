@@ -1,0 +1,105 @@
+stages:
+  prepare_data:
+    cmd: >
+      python -c "
+      from pathlib import Path
+      import shutil, random, os
+
+      random.seed(42)
+      src = Path('data/annotated')
+      dst = Path('data/prepared')
+
+      for split in ['train', 'val', 'test']:
+          (dst / split / 'images').mkdir(parents=True, exist_ok=True)
+          (dst / split / 'labels').mkdir(parents=True, exist_ok=True)
+
+      images = sorted(src.rglob('*.jpg')) + sorted(src.rglob('*.png'))
+      random.shuffle(images)
+
+      n = len(images)
+      train_end = int(n * 0.7)
+      val_end   = int(n * 0.85)
+
+      splits = {
+          'train': images[:train_end],
+          'val':   images[train_end:val_end],
+          'test':  images[val_end:],
+      }
+
+      for split, files in splits.items():
+          for img in files:
+              shutil.copy2(img, dst / split / 'images' / img.name)
+              lbl = img.with_suffix('.txt')
+              if lbl.exists():
+                  shutil.copy2(lbl, dst / split / 'labels' / lbl.name)
+      print(f'Prepared {n} images: train={len(splits[\"train\"])}, val={len(splits[\"val\"])}, test={len(splits[\"test\"])}')
+      "
+    deps:
+      - data/annotated
+    outs:
+      - data/prepared/train/images
+      - data/prepared/train/labels
+      - data/prepared/val/images
+      - data/prepared/val/labels
+      - data/prepared/test/images
+      - data/prepared/test/labels
+
+  train:
+    cmd: >
+      python -c "
+      from ultralytics import YOLO
+      model = YOLO('yolov8n.pt')
+      model.train(
+          data='defect.yaml',
+          epochs=100,
+          batch=16,
+          imgsz=640,
+          project='runs/train',
+          name='dvc_run',
+          exist_ok=True,
+      )
+      "
+    deps:
+      - defect.yaml
+      - data/prepared/train/images
+      - data/prepared/train/labels
+      - data/prepared/val/images
+      - data/prepared/val/labels
+    outs:
+      - runs/train/dvc_run/weights/best.pt
+    metrics:
+      - runs/train/dvc_run/results.csv:
+          cache: false
+    plots:
+      - runs/train/dvc_run/confusion_matrix.png:
+          cache: false
+      - runs/train/dvc_run/F1_curve.png:
+          cache: false
+
+  evaluate:
+    cmd: >
+      python -c "
+      import json
+      from ultralytics import YOLO
+
+      model = YOLO('runs/train/dvc_run/weights/best.pt')
+      metrics = model.val(data='defect.yaml', split='test')
+
+      results = {
+          'mAP50':     round(float(metrics.box.map50), 4),
+          'mAP50_95':  round(float(metrics.box.map), 4),
+          'precision':  round(float(metrics.box.mp), 4),
+          'recall':     round(float(metrics.box.mr), 4),
+      }
+
+      with open('evaluation_metrics.json', 'w') as f:
+          json.dump(results, f, indent=2)
+      print(f'Evaluation: {results}')
+      "
+    deps:
+      - runs/train/dvc_run/weights/best.pt
+      - data/prepared/test/images
+      - data/prepared/test/labels
+    metrics:
+      - evaluation_metrics.json:
+          cache: false

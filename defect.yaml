@@ -1,0 +1,31 @@
+# YOLO Dataset Configuration for Industrial Defect Detection
+# -----------------------------------------------------------
+# Adjust `path` to point to the root of your prepared dataset.
+# Expected directory structure:
+#   path/
+#     train/
+#       images/
+#       labels/
+#     val/
+#       images/
+#       labels/
+#     test/
+#       images/
+#       labels/
+#
+# Label format: YOLO (class_id cx cy w h) normalised to [0, 1].
+
+path: data/prepared
+train: train/images
+val: val/images
+test: test/images
+
+# Number of classes
+nc: 4
+
+# Class names
+names:
+  0: scratch
+  1: bubble
+  2: crack
+  3: color_mismatch

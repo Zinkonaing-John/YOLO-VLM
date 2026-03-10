@@ -1,0 +1,11 @@
+names:
+- crazing
+- inclusion
+- patches
+- pitted_surface
+- rolled-in_scale
+- scratches
+nc: 6
+path: /Users/zinko/Pictures/vlm-yolo/backend/datasets/NEU-DET
+train: train/images
+val: val/images
