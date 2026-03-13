@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
-from app.models.ai_models import YOLODetector
+from app.models.ai_models import CLIPClassifier, YOLODetector
 from app.routers import auth, inspection, statistics
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -95,6 +95,33 @@ async def lifespan(app: FastAPI):
     detector.load_model(settings.YOLO_WEIGHTS_PATH)
     app_state["detector"] = detector
 
+    # Load CLIP classifier
+    clip_classifier = CLIPClassifier()
+    clip_classifier.load_model(
+        model_name=settings.CLIP_MODEL_NAME,
+        ok_labels=settings.CLIP_LABELS_OK,
+        ng_labels=settings.CLIP_LABELS_NG,
+    )
+    app_state["clip_classifier"] = clip_classifier
+    logger.info("CLIP classifier initialized (loaded=%s)", clip_classifier.is_loaded)
+
+    # Load SimpleNet anomaly detector
+    # weights/ is at project root, one level above backend/
+    simplenet_path = str(Path(__file__).resolve().parents[2] / "weights" / "simplenet.pth")
+    try:
+        from app.models.simplenet import SimpleNet
+        simplenet = SimpleNet(backbone="resnet18", input_size=256)
+        if Path(simplenet_path).exists():
+            simplenet.load(simplenet_path)
+            app_state["simplenet"] = simplenet
+            logger.info("SimpleNet loaded from %s", simplenet_path)
+        else:
+            app_state["simplenet"] = None
+            logger.warning("SimpleNet weights not found at %s", simplenet_path)
+    except Exception:
+        app_state["simplenet"] = None
+        logger.exception("Failed to load SimpleNet")
+
     logger.info("Application startup complete")
     yield
 
@@ -110,8 +137,8 @@ app = FastAPI(
     title=settings.APP_TITLE,
     version=settings.APP_VERSION,
     description=(
-        "Production-grade REST + WebSocket API for real-time industrial "
-        "quality inspection powered by YOLO, Anomalib, and Vision-Language Models."
+        "REST + WebSocket API for real-time industrial quality inspection "
+        "powered by YOLO object detection and CLIP defect classification."
     ),
     lifespan=lifespan,
 )
@@ -144,11 +171,13 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 async def health_check() -> dict[str, Any]:
     """Basic liveness / readiness probe."""
     detector: YOLODetector = app_state.get("detector")  # type: ignore[assignment]
+    clip_cls: CLIPClassifier = app_state.get("clip_classifier")  # type: ignore[assignment]
     return {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": settings.APP_VERSION,
         "yolo_loaded": detector.is_loaded if detector else False,
+        "clip_loaded": clip_cls.is_loaded if clip_cls else False,
     }
 
 
@@ -167,7 +196,6 @@ async def websocket_inspection(websocket: WebSocket) -> None:
     try:
         while True:
             data = await websocket.receive_text()
-            # Simple keep-alive ping/pong
             if data.strip().lower() == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:

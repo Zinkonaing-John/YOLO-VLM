@@ -82,9 +82,9 @@ export default function ReportsPage() {
                 </tr>
               ) : results.length > 0 ? (
                 results.map((result, index) => {
-                  const isPassing = result.verdict === "PASS";
-                  const defects = result.defects ?? [];
-                  const processingTimeMs = result.processing_time_ms ?? 0;
+                  const isOK = result.verdict === "OK";
+                  const defects = (result.defects ?? []).filter((d) => d.is_defect);
+                  const processingTimeMs = result.processing_ms ?? 0;
                   const key = result.id ?? `${result.timestamp}-${index}`;
                   return (
                     <tr
@@ -106,7 +106,7 @@ export default function ReportsPage() {
                         })}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={isPassing ? "badge-pass" : "badge-fail"}>
+                        <span className={isOK ? "badge-pass" : "badge-fail"}>
                           {result.verdict}
                         </span>
                       </td>
@@ -151,134 +151,153 @@ export default function ReportsPage() {
       </div>
 
       {/* Detail Modal */}
-      {selectedResult && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setSelectedResult(null)}
-        >
+      {selectedResult && (() => {
+        const defects = (selectedResult.defects ?? []).filter((d) => d.is_defect);
+        const allDetections = selectedResult.defects ?? [];
+        const processingTimeMs = selectedResult.processing_ms ?? 0;
+        return (
           <div
-            className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-2xl w-full p-6 max-h-[85vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => setSelectedResult(null)}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-semibold text-zinc-200">
-                  Inspection Report
-                </h3>
-                <p className="text-xs text-zinc-500 font-mono mt-0.5">
-                  {selectedResult.id}
-                </p>
+            <div
+              className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-2xl w-full p-6 max-h-[85vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-200">
+                    Inspection Report
+                  </h3>
+                  <p className="text-xs text-zinc-500 font-mono mt-0.5">
+                    {selectedResult.id}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedResult(null)}
+                  className="text-zinc-500 hover:text-zinc-200 text-lg leading-none"
+                >
+                  x
+                </button>
               </div>
-              <button
-                onClick={() => setSelectedResult(null)}
-                className="text-zinc-500 hover:text-zinc-200 text-lg leading-none"
-              >
-                x
-              </button>
-            </div>
 
-            {/* Summary */}
-            {(() => {
-              const defects = selectedResult.defects ?? [];
-              const processingTimeMs = selectedResult.processing_time_ms ?? 0;
-              return (
-                <>
-            <div className="grid grid-cols-3 gap-3 mb-4">
-              <div className="bg-zinc-800 rounded-lg p-3">
-                <span className="text-[10px] text-zinc-500 uppercase">Verdict</span>
-                <div className="mt-1">
-                  <span
-                    className={
-                      selectedResult.verdict === "PASS" ? "badge-pass" : "badge-fail"
-                    }
-                  >
-                    {selectedResult.verdict}
-                  </span>
+              {/* Summary */}
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+                <div className="bg-zinc-800 rounded-lg p-3">
+                  <span className="text-[10px] text-zinc-500 uppercase">Verdict</span>
+                  <div className="mt-1">
+                    <span
+                      className={
+                        selectedResult.verdict === "OK" ? "badge-pass" : "badge-fail"
+                      }
+                    >
+                      {selectedResult.verdict}
+                    </span>
+                  </div>
+                </div>
+                <div className="bg-zinc-800 rounded-lg p-3">
+                  <span className="text-[10px] text-zinc-500 uppercase">Defects Found</span>
+                  <p className="text-lg font-bold text-zinc-100 mt-1">
+                    {defects.length}
+                  </p>
+                </div>
+                <div className="bg-zinc-800 rounded-lg p-3">
+                  <span className="text-[10px] text-zinc-500 uppercase">Processing</span>
+                  <p className="text-lg font-bold text-zinc-100 mt-1">
+                    {processingTimeMs.toFixed(0)}ms
+                  </p>
                 </div>
               </div>
-              <div className="bg-zinc-800 rounded-lg p-3">
-                <span className="text-[10px] text-zinc-500 uppercase">Defects Found</span>
-                <p className="text-lg font-bold text-zinc-100 mt-1">
-                  {defects.length}
-                </p>
-              </div>
-              <div className="bg-zinc-800 rounded-lg p-3">
-                <span className="text-[10px] text-zinc-500 uppercase">Processing</span>
-                <p className="text-lg font-bold text-zinc-100 mt-1">
-                  {processingTimeMs.toFixed(0)}ms
-                </p>
-              </div>
-            </div>
-                </>
-              );
-            })()}
 
-            {/* Timestamp */}
-            <div className="text-xs text-zinc-500 mb-4">
-              Inspected at{" "}
-              {new Date(selectedResult.timestamp).toLocaleString("en-US", {
-                weekday: "long",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
-            </div>
+              {/* Timestamp */}
+              <div className="text-xs text-zinc-500 mb-4">
+                Inspected at{" "}
+                {new Date(selectedResult.timestamp).toLocaleString("en-US", {
+                  weekday: "long",
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </div>
 
-            {/* Defects */}
-            {(selectedResult.defects ?? []).length > 0 ? (
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-zinc-400 uppercase">
-                  Detected Defects
-                </h4>
-                {(selectedResult.defects ?? []).map((defect, i) => (
-                  <div
-                    key={i}
-                    className="p-3 bg-zinc-800 rounded-lg border border-zinc-700"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm text-zinc-200 font-medium">
-                        {defect.class_name}
-                      </span>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-zinc-400 font-mono">
-                          conf: {(defect.confidence * 100).toFixed(1)}%
+              {/* Image */}
+              {selectedResult.image_url && (
+                <div className="relative w-full aspect-video bg-zinc-800 rounded-lg mb-4 overflow-hidden">
+                  <img
+                    src={selectedResult.image_url}
+                    alt="Inspection"
+                    className="w-full h-full object-cover"
+                  />
+                  {allDetections.map((defect, i) => {
+                    const x1 = defect.bbox_x1 ?? 0;
+                    const y1 = defect.bbox_y1 ?? 0;
+                    const x2 = defect.bbox_x2 ?? 0;
+                    const y2 = defect.bbox_y2 ?? 0;
+                    if (!x2 && !y2) return null;
+                    const color = defect.is_defect ? "border-red-500" : "border-emerald-500";
+                    return (
+                      <div
+                        key={i}
+                        className={`absolute border-2 ${color} rounded-sm`}
+                        style={{
+                          left: `${x1 * 100}%`,
+                          top: `${y1 * 100}%`,
+                          width: `${(x2 - x1) * 100}%`,
+                          height: `${(y2 - y1) * 100}%`,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Defects */}
+              {defects.length > 0 ? (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold text-zinc-400 uppercase">
+                    Detected Defects
+                  </h4>
+                  {defects.map((defect, i) => (
+                    <div
+                      key={i}
+                      className="p-3 bg-zinc-800 rounded-lg border border-zinc-700"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm text-zinc-200 font-medium">
+                          {defect.clip_label ?? defect.defect_class}
                         </span>
-                        <span className="text-xs text-zinc-500 font-mono">
-                          bbox: [{[defect.bbox_x1, defect.bbox_y1, defect.bbox_x2, defect.bbox_y2].map((v) => (v ?? 0).toFixed(3)).join(", ")}]
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-zinc-400 font-mono">
+                            CLIP: {((defect.clip_score ?? defect.confidence) * 100).toFixed(1)}%
+                          </span>
+                          <span className="text-xs text-zinc-500 font-mono">
+                            bbox: [{[defect.bbox_x1, defect.bbox_y1, defect.bbox_x2, defect.bbox_y2].map((v) => (v ?? 0).toFixed(1)).join(", ")}]
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    {defect.vlm_description && (
-                      <div className="mt-2 pt-2 border-t border-zinc-700">
-                        <span className="text-[10px] text-zinc-500 uppercase">
-                          VLM Analysis
-                        </span>
-                        <p className="text-xs text-zinc-300 mt-0.5">
-                          {defect.vlm_description}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-6 text-zinc-500">
-                <p className="text-sm">
-                  {selectedResult.vlm_response
-                    ?? (selectedResult.verdict === "PASS" ? "No defects detected" : "Failed inspection")}
-                </p>
-                {!selectedResult.vlm_response && selectedResult.verdict === "PASS" && (
-                  <p className="text-xs mt-1">This part passed quality inspection</p>
-                )}
-              </div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6 text-zinc-500">
+                  <p className="text-sm">
+                    {selectedResult.verdict === "OK"
+                      ? "No defects detected"
+                      : "NG – inspection failed"}
+                  </p>
+                  {selectedResult.verdict === "OK" && (
+                    <p className="text-xs mt-1">This part passed quality inspection</p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

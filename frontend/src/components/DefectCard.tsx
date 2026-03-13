@@ -1,17 +1,113 @@
 "use client";
 
-import { InspectionResult } from "@/hooks/useInspection";
+import { useRef, useState, useCallback } from "react";
+import { InspectionResult, Defect } from "@/hooks/useInspection";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+/** Draw bounding boxes + labels onto the image and trigger a download. */
+function downloadWithBoxes(src: string, defects: Defect[], filename: string) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.drawImage(img, 0, 0);
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const lineW = Math.max(2, Math.round(Math.min(w, h) / 200));
+    const fontSize = Math.max(12, Math.round(Math.min(w, h) / 40));
+
+    defects.forEach((d) => {
+      const x1 = d.bbox_x1 * w;
+      const y1 = d.bbox_y1 * h;
+      const bw = (d.bbox_x2 - d.bbox_x1) * w;
+      const bh = (d.bbox_y2 - d.bbox_y1) * h;
+      const color = d.is_defect ? "#ef4444" : "#22c55e";
+
+      // Box
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineW;
+      ctx.strokeRect(x1, y1, bw, bh);
+
+      // Label
+      const label = `${d.defect_class} ${(d.confidence * 100).toFixed(0)}%`;
+      ctx.font = `bold ${fontSize}px monospace`;
+      const tw = ctx.measureText(label).width;
+      const labelH = fontSize + 6;
+      const labelY = y1 - labelH > 0 ? y1 - labelH : y1;
+
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, labelY, tw + 10, labelH);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(label, x1 + 5, labelY + fontSize);
+    });
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, "image/jpeg", 0.92);
+  };
+  img.src = src;
+}
 
 interface DefectCardProps {
   result: InspectionResult;
   onClick?: () => void;
 }
 
+/**
+ * Compute the rendered image rect inside an object-contain container.
+ * Returns { offsetX, offsetY, width, height } in pixels relative to the container.
+ */
+function getContainedRect(
+  containerW: number,
+  containerH: number,
+  naturalW: number,
+  naturalH: number
+) {
+  const containerAR = containerW / containerH;
+  const imageAR = naturalW / naturalH;
+
+  let width: number, height: number, offsetX: number, offsetY: number;
+
+  if (imageAR > containerAR) {
+    // Image wider than container → letterbox top/bottom
+    width = containerW;
+    height = containerW / imageAR;
+    offsetX = 0;
+    offsetY = (containerH - height) / 2;
+  } else {
+    // Image taller than container → pillarbox left/right
+    height = containerH;
+    width = containerH * imageAR;
+    offsetX = (containerW - width) / 2;
+    offsetY = 0;
+  }
+
+  return { offsetX, offsetY, width, height };
+}
+
 export default function DefectCard({ result, onClick }: DefectCardProps) {
-  const isPassing = result.verdict === "PASS";
+  const isOK = result.verdict === "OK";
   const timestamp = new Date(result.timestamp);
-  const imageSrc = result.image_url ?? result.image_path ?? null;
-  const defects = result.defects ?? [];
+  const rawSrc = result.image_url ?? result.image_path ?? null;
+  const imageSrc = rawSrc
+    ? rawSrc.startsWith("http")
+      ? rawSrc
+      : `${API_URL}${rawSrc}`
+    : null;
+  const defects = (result.defects ?? []).filter((d) => d.is_defect);
   const shortId = (result.id ?? "").slice(0, 8) || "--------";
   const formattedTime = timestamp.toLocaleString("en-US", {
     month: "short",
@@ -21,21 +117,46 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
     second: "2-digit",
   });
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [imgRect, setImgRect] = useState<{
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const handleImgLoad = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = getContainedRect(
+      container.clientWidth,
+      container.clientHeight,
+      img.naturalWidth,
+      img.naturalHeight
+    );
+    setImgRect(rect);
+  }, []);
+
   return (
     <div
       onClick={onClick}
       className={`
         card-hover cursor-pointer overflow-hidden group
-        ${isPassing ? "hover:border-emerald-500/30" : "hover:border-red-500/30"}
+        ${isOK ? "hover:border-emerald-500/30" : "hover:border-red-500/30"}
       `}
     >
       {/* Image area */}
-      <div className="relative w-full aspect-video bg-zinc-900 rounded-md mb-3 overflow-hidden">
+      <div
+        ref={containerRef}
+        className="relative w-full aspect-video bg-black rounded-md mb-3 overflow-hidden"
+      >
         {imageSrc ? (
           <img
             src={imageSrc}
             alt={`Inspection ${result.id}`}
-            className="w-full h-full object-contain bg-black"
+            className="w-full h-full object-contain"
+            onLoad={handleImgLoad}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-zinc-600">
@@ -55,30 +176,55 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
           </div>
         )}
 
-        {/* Bounding box overlays */}
-        {defects.map((defect, i) => {
-          const { bbox_x1: x1, bbox_y1: y1, bbox_x2: x2, bbox_y2: y2 } = defect;
-          return (
-            <div
-              key={i}
-              className="absolute border-2 border-red-500 rounded-sm pointer-events-none"
-              style={{
-                left: `${x1 * 100}%`,
-                top: `${y1 * 100}%`,
-                width: `${(x2 - x1) * 100}%`,
-                height: `${(y2 - y1) * 100}%`,
-              }}
-            >
-              <span className="absolute -top-5 left-0 text-[9px] bg-red-500 text-white px-1 rounded whitespace-nowrap">
-                {defect.defect_class} {(defect.confidence * 100).toFixed(0)}%
-              </span>
-            </div>
-          );
-        })}
+        {/* Bounding box overlays — positioned within the actual image rect */}
+        {imgRect &&
+          (result.defects ?? []).map((defect, i) => {
+            const { bbox_x1: x1, bbox_y1: y1, bbox_x2: x2, bbox_y2: y2 } = defect;
+            const isDefect = defect.is_defect;
+            const borderColor = isDefect
+              ? "border-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]"
+              : "border-emerald-500";
+            const label = defect.defect_class;
+            const score = (defect.confidence * 100).toFixed(0);
+            return (
+              <div
+                key={i}
+                className={`absolute border-[2.5px] ${borderColor} pointer-events-none`}
+                style={{
+                  left: imgRect.offsetX + x1 * imgRect.width,
+                  top: imgRect.offsetY + y1 * imgRect.height,
+                  width: (x2 - x1) * imgRect.width,
+                  height: (y2 - y1) * imgRect.height,
+                }}
+              >
+                <span
+                  className={`absolute -top-5 left-0 text-[9px] font-semibold ${
+                    isDefect ? "bg-red-500" : "bg-emerald-500"
+                  } text-white px-1.5 py-0.5 rounded whitespace-nowrap`}
+                >
+                  {label} {score}%
+                </span>
+              </div>
+            );
+          })}
 
-        {/* Verdict badge */}
-        <div className="absolute top-2 right-2">
-          <span className={isPassing ? "badge-pass" : "badge-fail"}>
+        {/* Download + Verdict badges */}
+        <div className="absolute top-2 right-2 flex items-center gap-1.5">
+          {imageSrc && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadWithBoxes(imageSrc, result.defects ?? [], `inspection_${shortId}.jpg`);
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white p-1.5 rounded-md"
+              title="Download image with bounding boxes"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+            </button>
+          )}
+          <span className={isOK ? "badge-pass" : "badge-fail"}>
             {result.verdict}
           </span>
         </div>
@@ -117,24 +263,16 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
           </div>
         ) : (
           <p className="text-xs text-zinc-500">
-            {result.vlm_response
-              ?? defects.find((d) => d.vlm_description)?.vlm_description
-              ?? (isPassing ? "No defects detected" : "Failed inspection")}
+            {isOK ? "No defects detected" : "NG – inspection failed"}
           </p>
         )}
 
-        {/* VLM Description */}
-        {defects.some((d) => d.vlm_description) && (
-          <div className="pt-1 border-t border-zinc-800">
-            <p className="text-[11px] text-zinc-400 line-clamp-2">
-              {defects.find((d) => d.vlm_description)?.vlm_description}
-            </p>
-          </div>
-        )}
-
         {/* Processing time */}
-        <div className="flex items-center gap-1 text-[10px] text-zinc-600">
+        <div className="flex items-center justify-between text-[10px] text-zinc-600">
           <span>{(result.processing_ms ?? 0).toFixed(0)}ms</span>
+          <span className="font-mono">
+            {result.total_defects} defect{result.total_defects !== 1 ? "s" : ""}
+          </span>
         </div>
       </div>
     </div>

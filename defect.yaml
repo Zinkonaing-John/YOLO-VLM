@@ -1,6 +1,8 @@
-# YOLO Dataset Configuration for Industrial Defect Detection
-# -----------------------------------------------------------
-# Adjust `path` to point to the root of your prepared dataset.
+# YOLO Dataset Configuration for NEU Steel Surface Defect Detection
+# ------------------------------------------------------------------
+# Trained on NEU-DET: NEU Surface Defect Database
+# 6 classes of metal surface defects
+#
 # Expected directory structure:
 #   path/
 #     train/
@@ -9,23 +11,21 @@
 #     val/
 #       images/
 #       labels/
-#     test/
-#       images/
-#       labels/
 #
 # Label format: YOLO (class_id cx cy w h) normalised to [0, 1].
 
-path: data/prepared
+path: datasets/NEU-DET
 train: train/images
 val: val/images
-test: test/images
 
 # Number of classes
-nc: 4
+nc: 6
 
-# Class names
+# Class names (matches NEU-DET training)
 names:
-  0: scratch
-  1: bubble
-  2: crack
-  3: color_mismatch
+  0: crazing
+  1: inclusion
+  2: patches
+  3: pitted_surface
+  4: rolled-in_scale
+  5: scratches

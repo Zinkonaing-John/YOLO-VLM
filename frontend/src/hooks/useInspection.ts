@@ -9,20 +9,20 @@ export interface Defect {
   bbox_y1: number;
   bbox_x2: number;
   bbox_y2: number;
-  delta_e?: number;
-  vlm_description?: string;
+  clip_label?: string;
+  clip_score?: number;
+  is_defect?: boolean;
 }
 
 export interface InspectionResult {
   id: string;
   timestamp: string;
-  verdict: "PASS" | "FAIL";
+  verdict: "OK" | "NG";
   defects: Defect[];
   processing_ms: number;
   image_path?: string;
   image_url?: string;
   total_defects: number;
-  vlm_response?: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -65,7 +65,18 @@ export function useInspection() {
       ws.onmessage = (event) => {
         if (!mountedRef.current) return;
         try {
-          const data: InspectionResult = JSON.parse(event.data);
+          const raw = JSON.parse(event.data);
+          // Normalize backend field names to frontend InspectionResult
+          const data: InspectionResult = {
+            id: raw.id ?? raw.inspection_id ?? "",
+            timestamp: raw.timestamp ?? new Date().toISOString(),
+            verdict: raw.verdict,
+            defects: raw.defects ?? raw.detections ?? [],
+            processing_ms: raw.processing_ms ?? 0,
+            total_defects: raw.total_defects ?? 0,
+            image_path: raw.image_path,
+            image_url: raw.image_url,
+          };
           setResults((prev) => {
             const updated = [data, ...prev];
             return updated.slice(0, MAX_RESULTS);

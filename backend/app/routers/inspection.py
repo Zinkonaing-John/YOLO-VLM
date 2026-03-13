@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,14 +21,12 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.db_models import Defect, Inspection
 from app.routers.auth import verify_api_key
-from app.services.color_service import ColorInspector
 from app.services.inspection_service import (
     InspectionResult,
     load_image,
     run_inspection,
     save_upload,
 )
-from app.services.vlm_service import VLMService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -43,8 +45,9 @@ class DefectSchema(BaseModel):
     bbox_y1: float
     bbox_x2: float
     bbox_y2: float
-    delta_e: Optional[float] = None
-    vlm_description: Optional[str] = None
+    clip_label: Optional[str] = None
+    clip_score: Optional[float] = None
+    is_defect: bool = False
 
 
 class InspectionSchema(BaseModel):
@@ -56,7 +59,6 @@ class InspectionSchema(BaseModel):
     verdict: str
     total_defects: int
     processing_ms: Optional[float] = None
-    operator_review: bool
     defects: list[DefectSchema] = []
 
 
@@ -75,14 +77,6 @@ class InspectResponse(BaseModel):
     detections: list[dict[str, Any]]
     image_path: str
     image_url: Optional[str] = None
-    color_result: Optional[dict[str, Any]] = None
-    vlm_response: Optional[str] = None
-
-
-class AskResponse(BaseModel):
-    response: str
-    image_url: Optional[str] = None
-    processing_ms: float
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,7 +100,6 @@ def _inspection_to_schema(insp: Inspection) -> InspectionSchema:
         verdict=insp.verdict,
         total_defects=insp.total_defects,
         processing_ms=insp.processing_ms,
-        operator_review=insp.operator_review,
         defects=[
             DefectSchema(
                 id=str(d.id),
@@ -116,8 +109,9 @@ def _inspection_to_schema(insp: Inspection) -> InspectionSchema:
                 bbox_y1=d.bbox_y1,
                 bbox_x2=d.bbox_x2,
                 bbox_y2=d.bbox_y2,
-                delta_e=d.delta_e,
-                vlm_description=d.vlm_description,
+                clip_label=d.clip_label,
+                clip_score=d.clip_score,
+                is_defect=d.is_defect,
             )
             for d in (insp.defects or [])
         ],
@@ -130,19 +124,14 @@ def _inspection_to_schema(insp: Inspection) -> InspectionSchema:
 @router.post("/inspect", response_model=InspectResponse, status_code=status.HTTP_201_CREATED)
 async def inspect_image(
     file: UploadFile = File(..., description="Image to inspect"),
-    enable_vlm: bool = Query(True, description="Enable VLM defect explanations"),
-    prompt: Optional[str] = Query(None, description="Custom prompt for VLM analysis"),
     tenant_id: Optional[str] = Query(None, description="Tenant UUID"),
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> InspectResponse:
     """Upload an image for AI-powered quality inspection.
 
-    The pipeline runs YOLO detection, optional colour checking, and
-    optional VLM explanation before persisting results.
-    If a custom prompt is provided, the VLM will also answer it.
+    Pipeline: YOLO detect → Crop ROI → CLIP classify → OK/NG → Save to DB.
     """
-    # Read and save the uploaded file
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Empty file upload")
@@ -155,12 +144,10 @@ async def inspect_image(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Resolve services from app state (set during lifespan)
     from app.main import app_state
 
     detector = app_state["detector"]
-    vlm_service = VLMService()
-    color_inspector = ColorInspector()
+    clip_classifier = app_state["clip_classifier"]
 
     tid = uuid.UUID(tenant_id) if tenant_id else None
 
@@ -168,17 +155,10 @@ async def inspect_image(
         image=image,
         image_path=image_path,
         detector=detector,
-        vlm_service=vlm_service,
-        color_inspector=color_inspector,
+        clip_classifier=clip_classifier,
         db=db,
         tenant_id=tid,
-        enable_vlm=enable_vlm,
     )
-
-    # Run custom prompt through VLM if provided
-    vlm_response: str | None = None
-    if prompt and prompt.strip():
-        vlm_response = await vlm_service.ask(image_path, prompt.strip())
 
     # Broadcast via WebSocket
     try:
@@ -189,43 +169,14 @@ async def inspect_image(
 
     response_data = result.to_dict()
     response_data["image_url"] = _make_image_url(response_data.get("image_path"))
-    response_data["vlm_response"] = vlm_response
     return InspectResponse(**response_data)
-
-
-@router.post("/ask", response_model=AskResponse)
-async def ask_about_image(
-    file: UploadFile = File(..., description="Image to analyze"),
-    prompt: str = Query(..., description="Your question about the image"),
-    _key: str = Depends(verify_api_key),
-) -> AskResponse:
-    """Ask a free-form question about an uploaded image using the VLM."""
-    import time
-
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Empty file upload")
-
-    filename = file.filename or "image.jpg"
-    image_path = save_upload(contents, filename)
-
-    start = time.perf_counter()
-    vlm_service = VLMService()
-    response_text = await vlm_service.ask(image_path, prompt.strip())
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-
-    return AskResponse(
-        response=response_text,
-        image_url=_make_image_url(image_path),
-        processing_ms=round(elapsed_ms, 2),
-    )
 
 
 @router.get("/inspections", response_model=InspectionListResponse)
 async def list_inspections(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    verdict: Optional[str] = Query(None, regex="^(PASS|FAIL)$"),
+    verdict: Optional[str] = Query(None, regex="^(OK|NG)$"),
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> InspectionListResponse:
@@ -275,13 +226,102 @@ async def get_inspection(
     return _inspection_to_schema(inspection)
 
 
+@router.get("/inspections/{inspection_id}/heatmap")
+async def get_heatmap(
+    inspection_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(verify_api_key),
+):
+    """Generate and return an anomaly heatmap image for this inspection."""
+    try:
+        uid = uuid.UUID(inspection_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    result = await db.execute(select(Inspection).where(Inspection.id == uid))
+    inspection = result.scalar_one_or_none()
+    if inspection is None:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+
+    if not inspection.image_path:
+        raise HTTPException(status_code=404, detail="No image stored for this inspection")
+
+    from app.main import app_state
+    simplenet = app_state.get("simplenet")
+    if simplenet is None:
+        raise HTTPException(status_code=503, detail="SimpleNet model not loaded")
+
+    image = load_image(inspection.image_path)
+    anomaly = simplenet.predict(image)
+
+    # Encode heatmap as PNG
+    _, buf = cv2.imencode(".png", anomaly.heatmap)
+    return StreamingResponse(
+        io.BytesIO(buf.tobytes()),
+        media_type="image/png",
+        headers={"X-Anomaly-Score": str(round(anomaly.score, 4))},
+    )
+
+
+@router.get("/inspections/{inspection_id}/clip-details")
+async def get_clip_details(
+    inspection_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(verify_api_key),
+):
+    """Run CLIP classification on each detection ROI and return detailed results."""
+    try:
+        uid = uuid.UUID(inspection_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    result = await db.execute(select(Inspection).where(Inspection.id == uid))
+    inspection = result.scalar_one_or_none()
+    if inspection is None:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+
+    if not inspection.image_path:
+        raise HTTPException(status_code=404, detail="No image stored")
+
+    from app.main import app_state
+    clip_classifier = app_state.get("clip_classifier")
+    if not clip_classifier or not clip_classifier.is_loaded:
+        raise HTTPException(status_code=503, detail="CLIP model not loaded")
+
+    image = load_image(inspection.image_path)
+    h, w = image.shape[:2]
+
+    details = []
+    for defect in (inspection.defects or []):
+        px1 = max(0, int(defect.bbox_x1 * w))
+        py1 = max(0, int(defect.bbox_y1 * h))
+        px2 = min(w, int(defect.bbox_x2 * w))
+        py2 = min(h, int(defect.bbox_y2 * h))
+        roi = image[py1:py2, px1:px2]
+
+        if roi.size == 0:
+            continue
+
+        clip_result = clip_classifier.classify(roi)
+        details.append({
+            "defect_id": str(defect.id),
+            "defect_class": defect.defect_class,
+            "confidence": round(defect.confidence, 4),
+            "bbox": [defect.bbox_x1, defect.bbox_y1, defect.bbox_x2, defect.bbox_y2],
+            "clip_label": clip_result.label,
+            "clip_score": round(clip_result.score, 4),
+            "is_defect": clip_result.is_defect,
+        })
+
+    return {"inspection_id": inspection_id, "clip_details": details}
+
+
 @router.delete("/inspections", status_code=status.HTTP_200_OK)
 async def delete_all_inspections(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> dict:
     """Delete all inspections and their defects (demo/reset use)."""
-    # Defects cascade-deleted via FK ON DELETE CASCADE
     await db.execute(delete(Defect))
     result = await db.execute(delete(Inspection))
     await db.commit()

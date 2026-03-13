@@ -30,9 +30,11 @@ class DefectTypeCount(BaseModel):
 
 class OverallStatistics(BaseModel):
     total_inspections: int
-    pass_count: int
-    fail_count: int
-    pass_rate: float
+    ok_count: int
+    ng_count: int
+    ok_rate: float
+    ng_rate: float
+    total_defects: int
     avg_processing_ms: Optional[float]
     defect_type_distribution: list[DefectTypeCount]
 
@@ -40,9 +42,9 @@ class OverallStatistics(BaseModel):
 class DailyStatItem(BaseModel):
     date: date
     total: int
-    pass_count: int
-    fail_count: int
-    pass_rate: float
+    ok_count: int
+    ng_count: int
+    ok_rate: float
 
 
 class DailyStatisticsResponse(BaseModel):
@@ -59,17 +61,12 @@ async def get_statistics(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> OverallStatistics:
-    """Return overall pass/fail counts, defect-type distribution, etc."""
+    """Return overall OK/NG counts, defect-type distribution, etc."""
 
-    base = select(Inspection)
-    if tenant_id:
-        base = base.where(Inspection.tenant_id == tenant_id)
-
-    # Total / pass / fail
     agg_q = select(
         func.count(Inspection.id).label("total"),
-        func.sum(case((Inspection.verdict == "PASS", 1), else_=0)).label("pass_count"),
-        func.sum(case((Inspection.verdict == "FAIL", 1), else_=0)).label("fail_count"),
+        func.sum(case((Inspection.verdict == "OK", 1), else_=0)).label("ok_count"),
+        func.sum(case((Inspection.verdict == "NG", 1), else_=0)).label("ng_count"),
         func.avg(Inspection.processing_ms).label("avg_ms"),
     )
     if tenant_id:
@@ -77,18 +74,26 @@ async def get_statistics(
 
     row = (await db.execute(agg_q)).one()
     total = row.total or 0
-    pass_count = row.pass_count or 0
-    fail_count = row.fail_count or 0
+    ok_count = row.ok_count or 0
+    ng_count = row.ng_count or 0
     avg_ms = round(row.avg_ms, 2) if row.avg_ms else None
-    pass_rate = (pass_count / total * 100.0) if total > 0 else 0.0
+    ok_rate = (ok_count / total * 100.0) if total > 0 else 0.0
+    ng_rate = (ng_count / total * 100.0) if total > 0 else 0.0
+
+    # Total defects (only ROIs classified as defect by CLIP)
+    defect_count_q = select(func.count(Defect.id)).where(Defect.is_defect == True)
+    if tenant_id:
+        defect_count_q = defect_count_q.join(Inspection).where(Inspection.tenant_id == tenant_id)
+    total_defects = (await db.execute(defect_count_q)).scalar() or 0
 
     # Defect type distribution
     defect_q = (
         select(
-            Defect.defect_class,
+            Defect.clip_label,
             func.count(Defect.id).label("cnt"),
         )
-        .group_by(Defect.defect_class)
+        .where(Defect.is_defect == True)
+        .group_by(Defect.clip_label)
         .order_by(func.count(Defect.id).desc())
     )
     if tenant_id:
@@ -96,14 +101,16 @@ async def get_statistics(
 
     defect_rows = (await db.execute(defect_q)).all()
     distribution = [
-        DefectTypeCount(defect_class=r.defect_class, count=r.cnt) for r in defect_rows
+        DefectTypeCount(defect_class=r.clip_label or "unknown", count=r.cnt) for r in defect_rows
     ]
 
     return OverallStatistics(
         total_inspections=total,
-        pass_count=pass_count,
-        fail_count=fail_count,
-        pass_rate=round(pass_rate, 2),
+        ok_count=ok_count,
+        ng_count=ng_count,
+        ok_rate=round(ok_rate, 2),
+        ng_rate=round(ng_rate, 2),
+        total_defects=total_defects,
         avg_processing_ms=avg_ms,
         defect_type_distribution=distribution,
     )
@@ -116,7 +123,7 @@ async def get_daily_statistics(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> DailyStatisticsResponse:
-    """Return daily pass/fail counts for charting."""
+    """Return daily OK/NG counts for charting."""
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -124,8 +131,8 @@ async def get_daily_statistics(
         select(
             cast(Inspection.timestamp, Date).label("day"),
             func.count(Inspection.id).label("total"),
-            func.sum(case((Inspection.verdict == "PASS", 1), else_=0)).label("pass_count"),
-            func.sum(case((Inspection.verdict == "FAIL", 1), else_=0)).label("fail_count"),
+            func.sum(case((Inspection.verdict == "OK", 1), else_=0)).label("ok_count"),
+            func.sum(case((Inspection.verdict == "NG", 1), else_=0)).label("ng_count"),
         )
         .where(Inspection.timestamp >= since)
         .group_by(cast(Inspection.timestamp, Date))
@@ -140,15 +147,15 @@ async def get_daily_statistics(
     items = []
     for r in rows:
         total = r.total or 0
-        pc = r.pass_count or 0
-        fc = r.fail_count or 0
+        ok = r.ok_count or 0
+        ng = r.ng_count or 0
         items.append(
             DailyStatItem(
                 date=r.day,
                 total=total,
-                pass_count=pc,
-                fail_count=fc,
-                pass_rate=round((pc / total * 100.0) if total > 0 else 0.0, 2),
+                ok_count=ok,
+                ng_count=ng,
+                ok_rate=round((ok / total * 100.0) if total > 0 else 0.0, 2),
             )
         )
 

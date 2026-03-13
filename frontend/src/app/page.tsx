@@ -9,9 +9,10 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface Statistics {
   total_inspections: number;
-  pass_rate: number;
+  ok_rate: number;
+  ng_rate: number;
   total_defects: number;
-  avg_processing_time_ms: number;
+  avg_processing_ms: number;
 }
 
 function StatCard({
@@ -58,14 +59,15 @@ export default function HomePage() {
   }, []);
 
   const totalInspections = stats?.total_inspections ?? 0;
-  const passRate = stats?.pass_rate ?? 0;
+  const okRate = stats?.ok_rate ?? 0;
+  const ngRate = stats?.ng_rate ?? 0;
   const totalDefects = stats?.total_defects ?? 0;
-  const avgTime = stats?.avg_processing_time_ms ?? 0;
+  const avgTime = stats?.avg_processing_ms ?? 0;
 
   return (
     <div className="space-y-6">
       {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         <StatCard
           label="Total Inspections"
           value={loading ? "--" : totalInspections.toLocaleString()}
@@ -73,15 +75,21 @@ export default function HomePage() {
           color="text-zinc-100"
         />
         <StatCard
-          label="Pass Rate"
-          value={loading ? "--" : `${passRate.toFixed(1)}%`}
-          sub={passRate >= 95 ? "within target" : "below 95% target"}
-          color={passRate >= 95 ? "text-emerald-400" : "text-amber-400"}
+          label="OK Rate"
+          value={loading ? "--" : `${okRate.toFixed(1)}%`}
+          sub={okRate >= 95 ? "within target" : "below 95% target"}
+          color={okRate >= 95 ? "text-emerald-400" : "text-amber-400"}
+        />
+        <StatCard
+          label="NG Rate"
+          value={loading ? "--" : `${ngRate.toFixed(1)}%`}
+          sub="of total inspections"
+          color={ngRate <= 5 ? "text-emerald-400" : "text-red-400"}
         />
         <StatCard
           label="Total Defects"
           value={loading ? "--" : totalDefects.toLocaleString()}
-          sub="detected"
+          sub="CLIP detected"
           color="text-red-400"
         />
         <StatCard

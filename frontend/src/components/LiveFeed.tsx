@@ -4,7 +4,7 @@ import { useInspection, InspectionResult } from "@/hooks/useInspection";
 import { useEffect, useRef, useState } from "react";
 
 function FeedItem({ result, isNew }: { result: InspectionResult; isNew: boolean }) {
-  const isPassing = result.verdict === "PASS";
+  const isPassing = result.verdict === "OK";
   const shortId = result.id ? result.id.slice(0, 8) : "--------";
   const defects = result.defects ?? [];
   const time = new Date(result.timestamp).toLocaleTimeString("en-US", {

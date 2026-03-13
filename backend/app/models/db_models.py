@@ -43,12 +43,11 @@ class Inspection(Base):
     image_path = Column(Text, nullable=True)
     verdict = Column(
         String(4),
-        CheckConstraint("verdict IN ('PASS','FAIL')"),
+        CheckConstraint("verdict IN ('OK','NG')"),
         nullable=False,
     )
     total_defects = Column(Integer, default=0, nullable=False)
     processing_ms = Column(Float, nullable=True)
-    operator_review = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     defects = relationship(
@@ -84,11 +83,12 @@ class Defect(Base):
     bbox_y1 = Column(Float, nullable=False)
     bbox_x2 = Column(Float, nullable=False)
     bbox_y2 = Column(Float, nullable=False)
-    delta_e = Column(Float, nullable=True)
-    vlm_description = Column(Text, nullable=True)
+    clip_label = Column(String(100), nullable=True)
+    clip_score = Column(Float, nullable=True)
+    is_defect = Column(Boolean, default=False, nullable=False)
 
     # Relationships
     inspection = relationship("Inspection", back_populates="defects")
 
     def __repr__(self) -> str:
-        return f"<Defect {self.defect_class} conf={self.confidence:.2f}>"
+        return f"<Defect {self.defect_class} clip={self.clip_label} is_defect={self.is_defect}>"

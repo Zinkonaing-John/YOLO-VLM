@@ -7,21 +7,22 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface DailyDataPoint {
   date: string;
-  pass_count: number;
-  fail_count: number;
+  ok_count: number;
+  ng_count: number;
 }
 
 interface DefectDistItem {
-  class_name: string;
+  defect_class: string;
   count: number;
 }
 
 interface Statistics {
   total_inspections: number;
-  pass_rate: number;
+  ok_rate: number;
+  ng_rate: number;
   total_defects: number;
-  avg_processing_time_ms: number;
-  defect_distribution?: DefectDistItem[];
+  avg_processing_ms: number;
+  defect_type_distribution?: DefectDistItem[];
 }
 
 export default function DashboardPage() {
@@ -40,14 +41,14 @@ export default function DashboardPage() {
 
         if (dailyRes.status === "fulfilled" && dailyRes.value.ok) {
           const data = await dailyRes.value.json();
-          setDailyData(Array.isArray(data) ? data : data.daily || []);
+          setDailyData(Array.isArray(data) ? data : data.items || []);
         }
 
         if (statsRes.status === "fulfilled" && statsRes.value.ok) {
           const data: Statistics = await statsRes.value.json();
           setStats(data);
-          if (data.defect_distribution) {
-            setDefectDist(data.defect_distribution);
+          if (data.defect_type_distribution) {
+            setDefectDist(data.defect_type_distribution);
           }
         }
       } catch {
@@ -71,42 +72,37 @@ export default function DashboardPage() {
 
       {/* Summary stats row */}
       {stats && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {(() => {
-            const totalInspections = stats.total_inspections ?? 0;
-            const passRate = stats.pass_rate ?? 0;
-            const totalDefects = stats.total_defects ?? 0;
-            const avgTimeMs = stats.avg_processing_time_ms ?? 0;
-
-            return (
-              <>
-                <div className="stat-card">
-                  <span className="text-xs text-zinc-500 uppercase tracking-wider">Inspections</span>
-                  <span className="text-2xl font-bold text-zinc-100">
-                    {totalInspections.toLocaleString()}
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="text-xs text-zinc-500 uppercase tracking-wider">Pass Rate</span>
-                  <span className={`text-2xl font-bold ${passRate >= 95 ? "text-emerald-400" : "text-amber-400"}`}>
-                    {passRate.toFixed(1)}%
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="text-xs text-zinc-500 uppercase tracking-wider">Total Defects</span>
-                  <span className="text-2xl font-bold text-red-400">
-                    {totalDefects.toLocaleString()}
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="text-xs text-zinc-500 uppercase tracking-wider">Avg Time</span>
-                  <span className="text-2xl font-bold text-blue-400">
-                    {avgTimeMs.toFixed(0)}ms
-                  </span>
-                </div>
-              </>
-            );
-          })()}
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          <div className="stat-card">
+            <span className="text-xs text-zinc-500 uppercase tracking-wider">Inspections</span>
+            <span className="text-2xl font-bold text-zinc-100">
+              {stats.total_inspections.toLocaleString()}
+            </span>
+          </div>
+          <div className="stat-card">
+            <span className="text-xs text-zinc-500 uppercase tracking-wider">OK Rate</span>
+            <span className={`text-2xl font-bold ${stats.ok_rate >= 95 ? "text-emerald-400" : "text-amber-400"}`}>
+              {stats.ok_rate.toFixed(1)}%
+            </span>
+          </div>
+          <div className="stat-card">
+            <span className="text-xs text-zinc-500 uppercase tracking-wider">NG Rate</span>
+            <span className={`text-2xl font-bold ${stats.ng_rate <= 5 ? "text-emerald-400" : "text-red-400"}`}>
+              {stats.ng_rate.toFixed(1)}%
+            </span>
+          </div>
+          <div className="stat-card">
+            <span className="text-xs text-zinc-500 uppercase tracking-wider">Total Defects</span>
+            <span className="text-2xl font-bold text-red-400">
+              {stats.total_defects.toLocaleString()}
+            </span>
+          </div>
+          <div className="stat-card">
+            <span className="text-xs text-zinc-500 uppercase tracking-wider">Avg Time</span>
+            <span className="text-2xl font-bold text-blue-400">
+              {(stats.avg_processing_ms ?? 0).toFixed(0)}ms
+            </span>
+          </div>
         </div>
       )}
 

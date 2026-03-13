@@ -247,10 +247,16 @@ export default function CameraFeed() {
 
       if (res.ok) {
         const data = await res.json();
-        setLastResult(data as InspectionResult);
+        // Backend returns "detections", normalize to "defects" for frontend
+        const defects: Defect[] = data.detections ?? data.defects ?? [];
+        const result: InspectionResult = {
+          ...data,
+          defects,
+        };
+        setLastResult(result);
         setProcessingMs(performance.now() - t0);
         setVlmResponse(data.vlm_response ?? null);
-        drawOverlay(data.defects ?? []);
+        drawOverlay(defects);
       }
     } catch {
       // skip
@@ -304,18 +310,14 @@ export default function CameraFeed() {
 
     const offsetX = roi ? roi.x * overlay.width : 0;
     const offsetY = roi ? roi.y * overlay.height : 0;
-    const cropW = roi ? roi.w * video.videoWidth : video.videoWidth;
-    const cropH = roi ? roi.h * video.videoHeight : video.videoHeight;
     const regionDisplayW = roi ? roi.w * overlay.width : overlay.width;
     const regionDisplayH = roi ? roi.h * overlay.height : overlay.height;
-    const scaleX = regionDisplayW / cropW;
-    const scaleY = regionDisplayH / cropH;
 
     defects.forEach((d) => {
-      const x = d.bbox_x1 * scaleX + offsetX;
-      const y = d.bbox_y1 * scaleY + offsetY;
-      const w = (d.bbox_x2 - d.bbox_x1) * scaleX;
-      const h = (d.bbox_y2 - d.bbox_y1) * scaleY;
+      const x = d.bbox_x1 * regionDisplayW + offsetX;
+      const y = d.bbox_y1 * regionDisplayH + offsetY;
+      const w = (d.bbox_x2 - d.bbox_x1) * regionDisplayW;
+      const h = (d.bbox_y2 - d.bbox_y1) * regionDisplayH;
 
       ctx.strokeStyle = "#ef4444";
       ctx.lineWidth = 2;
@@ -436,7 +438,7 @@ export default function CameraFeed() {
     }
   };
 
-  const isPassing = lastResult?.verdict === "PASS";
+  const isPassing = lastResult?.verdict === "OK";
   const defects = lastResult?.defects ?? [];
 
   const previewRoi =

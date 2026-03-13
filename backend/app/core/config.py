@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # ── App ──────────────────────────────────────────────────────────────
     APP_TITLE: str = "Industrial AI Vision API"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = "2.0.0"
     DEBUG: bool = False
 
     # ── Database ─────────────────────────────────────────────────────────
@@ -29,13 +29,25 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # ── AI / Model paths ─────────────────────────────────────────────────
-    YOLO_WEIGHTS_PATH: str = "weights/best.pt"
-    YOLO_CONFIDENCE: float = 0.25
+    YOLO_WEIGHTS_PATH: str = "yolov8m.pt"
+    YOLO_CONFIDENCE: float = 0.20
 
-    # ── VLM (Ollama / LLaVA) ─────────────────────────────────────────────
-    VLM_API_URL: str = "http://localhost:11434/api/generate"
-    VLM_MODEL: str = "llava:13b"
-    VLM_ENABLED: bool = True
+    # ── CLIP defect classification ───────────────────────────────────────
+    CLIP_MODEL_NAME: str = "ViT-B/32"
+    CLIP_DEFECT_THRESHOLD: float = 0.5
+    CLIP_LABELS_OK: list[str] = [
+        "a photo of a smooth clean metal surface",
+        "a photo of a flawless steel product",
+        "a photo of a normal metal surface without defects",
+    ]
+    CLIP_LABELS_NG: list[str] = [
+        "a photo of a scratched metal surface",
+        "a photo of a cracked metal surface",
+        "a photo of a metal surface with crazing defects",
+        "a photo of a metal surface with inclusion defects",
+        "a photo of a pitted metal surface",
+        "a photo of a metal surface with rolled-in scale",
+    ]
 
     # ── Auth ─────────────────────────────────────────────────────────────
     API_KEY: Optional[str] = None  # None = auth disabled
@@ -43,9 +55,6 @@ class Settings(BaseSettings):
 
     # ── Storage ──────────────────────────────────────────────────────────
     UPLOAD_DIR: str = "uploads/"
-
-    # ── Color inspection ─────────────────────────────────────────────────
-    DELTA_E_THRESHOLD: float = 5.0
 
 
 @lru_cache

@@ -14,10 +14,8 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.ai_models import DetectionResult, YOLODetector
+from app.models.ai_models import CLIPClassifier, DetectionResult, YOLODetector
 from app.models.db_models import Defect, Inspection
-from app.services.color_service import ColorInspector
-from app.services.vlm_service import VLMService
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -32,7 +30,6 @@ class InspectionResult:
     processing_ms: float
     detections: list[dict[str, Any]] = field(default_factory=list)
     image_path: str = ""
-    color_result: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,7 +39,6 @@ class InspectionResult:
             "processing_ms": round(self.processing_ms, 2),
             "detections": self.detections,
             "image_path": self.image_path,
-            "color_result": self.color_result,
         }
 
 
@@ -50,84 +46,72 @@ async def run_inspection(
     image: np.ndarray,
     image_path: str,
     detector: YOLODetector,
-    vlm_service: VLMService,
-    color_inspector: ColorInspector,
+    clip_classifier: CLIPClassifier,
     db: AsyncSession,
     tenant_id: uuid.UUID | None = None,
-    reference_image: np.ndarray | None = None,
-    enable_vlm: bool = True,
 ) -> InspectionResult:
-    """Execute the full inspection pipeline.
+    """Execute the inspection pipeline.
 
     Pipeline stages:
-      1. YOLO defect detection
-      2. Color inspection (if reference image provided)
-      3. VLM defect explanation (if enabled)
-      4. Persist results to database
-
-    Args:
-        image: BGR numpy array of the image under inspection.
-        image_path: Filesystem path where the image has been saved.
-        detector: Loaded YOLODetector instance.
-        vlm_service: VLMService for generating explanations.
-        color_inspector: ColorInspector for Delta-E checks.
-        db: Async SQLAlchemy session.
-        tenant_id: Optional tenant UUID for multi-tenancy.
-        reference_image: Optional golden-reference image for color comparison.
-        enable_vlm: Whether to call the VLM for each defect.
-
-    Returns:
-        ``InspectionResult`` with full details.
+      1. YOLO object detection
+      2. Crop ROI for each detection
+      3. CLIP defect classification on each ROI
+      4. Determine OK / NG verdict
+      5. Save to DB
     """
     start = time.perf_counter()
     inspection_id = uuid.uuid4()
 
-    # ── 1. YOLO Detection ────────────────────────────────────────────────
+    h, w = image.shape[:2]
+
+    # ── 1. YOLO object detection (primary defect detector) ────────────
     detections: list[DetectionResult] = detector.detect(
         image,
         conf=settings.YOLO_CONFIDENCE,
     )
-    total_defects = len(detections)
-    verdict = "FAIL" if total_defects > 0 else "PASS"
 
-    # ── 2. Color Inspection ──────────────────────────────────────────────
-    color_result_dict: dict[str, Any] | None = None
-    if reference_image is not None:
-        try:
-            color_result = color_inspector.check_color(image, reference_image)
-            color_result_dict = color_result.to_dict()
-            if color_result.verdict == "FAIL":
-                verdict = "FAIL"
-        except Exception:
-            logger.exception("Color inspection failed")
-
-    # ── 3. VLM Explanation (per defect) ──────────────────────────────────
+    # ── 2. Enrich YOLO detections with per-ROI CLIP scores ───────────
     detection_dicts: list[dict[str, Any]] = []
+
     for det in detections:
         d = det.to_dict()
-        if enable_vlm and settings.VLM_ENABLED:
-            try:
-                explanation = await vlm_service.explain_defect(
-                    image_path=image_path,
-                    defect_type=det.defect_class,
-                )
-                d["vlm_description"] = explanation
-            except Exception:
-                logger.exception("VLM explanation failed for %s", det.defect_class)
-                d["vlm_description"] = ""
+
+        # Convert normalized coords back to pixel coords for ROI crop
+        px1 = max(0, int(det.bbox_x1 * w))
+        py1 = max(0, int(det.bbox_y1 * h))
+        px2 = min(w, int(det.bbox_x2 * w))
+        py2 = min(h, int(det.bbox_y2 * h))
+        roi = image[py1:py2, px1:px2]
+
+        if roi.size > 0 and clip_classifier.is_loaded:
+            roi_clip = clip_classifier.classify(
+                roi,
+                threshold=settings.CLIP_DEFECT_THRESHOLD,
+            )
+            d["clip_label"] = roi_clip.label
+            d["clip_score"] = round(roi_clip.score, 4)
+            d["is_defect"] = roi_clip.is_defect
         else:
-            d["vlm_description"] = ""
+            d["clip_label"] = None
+            d["clip_score"] = None
+            # YOLO detection = defect by default (it was trained on defect classes)
+            d["is_defect"] = True
+
         detection_dicts.append(d)
+
+    # ── 3. OK / NG Verdict (driven by YOLO detections) ────────────────
+    defect_count = len(detection_dicts)
+    verdict = "NG" if defect_count > 0 else "OK"
 
     elapsed_ms = (time.perf_counter() - start) * 1000.0
 
-    # ── 4. Persist to Database ───────────────────────────────────────────
+    # ── 4. Save to DB ────────────────────────────────────────────────────
     inspection = Inspection(
         id=inspection_id,
         tenant_id=tenant_id,
         image_path=image_path,
         verdict=verdict,
-        total_defects=total_defects,
+        total_defects=defect_count,
         processing_ms=elapsed_ms,
     )
     db.add(inspection)
@@ -142,8 +126,9 @@ async def run_inspection(
             bbox_y1=d["bbox_y1"],
             bbox_x2=d["bbox_x2"],
             bbox_y2=d["bbox_y2"],
-            delta_e=color_result_dict["delta_e"] if color_result_dict else None,
-            vlm_description=d.get("vlm_description", ""),
+            clip_label=d.get("clip_label", ""),
+            clip_score=d.get("clip_score"),
+            is_defect=d.get("is_defect", True),
         )
         db.add(defect)
 
@@ -154,17 +139,16 @@ async def run_inspection(
         inspection_id,
         elapsed_ms,
         verdict,
-        total_defects,
+        defect_count,
     )
 
     return InspectionResult(
         inspection_id=inspection_id,
         verdict=verdict,
-        total_defects=total_defects,
+        total_defects=defect_count,
         processing_ms=elapsed_ms,
         detections=detection_dicts,
         image_path=image_path,
-        color_result=color_result_dict,
     )
 
 

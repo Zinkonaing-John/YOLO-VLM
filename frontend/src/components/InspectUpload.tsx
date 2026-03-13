@@ -44,8 +44,15 @@ export default function InspectUpload() {
         throw new Error(`Inspection failed: ${response.status} ${response.statusText}`);
       }
 
-      const data: InspectionResult = await response.json();
-      setResult(data);
+      const data = await response.json();
+      // Backend returns "detections" and "inspection_id", normalize to frontend types
+      const normalized: InspectionResult = {
+        ...data,
+        id: data.id ?? data.inspection_id ?? "",
+        timestamp: data.timestamp ?? new Date().toISOString(),
+        defects: data.defects ?? data.detections ?? [],
+      };
+      setResult(normalized);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Inspection failed");
     } finally {
@@ -87,7 +94,7 @@ export default function InspectUpload() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const isPassing = result?.verdict === "PASS";
+  const isPassing = result?.verdict === "OK";
   const defects = result?.defects ?? [];
 
   return (
