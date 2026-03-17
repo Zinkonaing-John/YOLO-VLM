@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge Defect Inspector</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <div class="header-left">
+            <h1>Edge Defect Inspector</h1>
+            <span id="connection-badge" class="badge badge-disconnected">Disconnected</span>
+        </div>
+        <div class="header-right">
+            <button id="btn-camera-start" class="btn btn-ok" onclick="controlCamera('start')">Start Camera</button>
+            <button id="btn-camera-stop" class="btn btn-ng" onclick="controlCamera('stop')">Stop Camera</button>
+            <label class="upload-btn btn">
+                Upload Image
+                <input type="file" id="file-input" accept="image/*" hidden>
+            </label>
+        </div>
+    </header>
+
+    <!-- Navigation tabs -->
+    <nav class="tabs">
+        <button class="tab active" data-tab="live" onclick="switchTab('live')">Live Feed</button>
+        <button class="tab" data-tab="stats" onclick="switchTab('stats')">Statistics</button>
+        <button class="tab" data-tab="gallery" onclick="switchTab('gallery')">Gallery</button>
+    </nav>
+
+    <!-- Live Feed Tab -->
+    <section id="tab-live" class="tab-content active">
+        <div class="live-grid">
+            <!-- Latest inspection image -->
+            <div class="card live-image-card">
+                <div class="card-header">
+                    <h3>Latest Inspection</h3>
+                    <span id="live-verdict" class="verdict-badge"></span>
+                </div>
+                <div class="image-container" id="live-image-container">
+                    <img id="live-image" src="" alt="Waiting for frame...">
+                    <canvas id="live-canvas"></canvas>
+                    <div class="placeholder" id="live-placeholder">
+                        <p>Waiting for camera feed...</p>
+                    </div>
+                </div>
+                <div class="image-meta" id="live-meta"></div>
+            </div>
+
+            <!-- Live metrics -->
+            <div class="card metrics-card">
+                <h3>Live Metrics</h3>
+                <div class="metric-grid">
+                    <div class="metric">
+                        <span class="metric-value" id="metric-fps">--</span>
+                        <span class="metric-label">FPS</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value" id="metric-pipeline">--</span>
+                        <span class="metric-label">Pipeline (ms)</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value" id="metric-defects">--</span>
+                        <span class="metric-label">Defects</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-value" id="metric-verdict">--</span>
+                        <span class="metric-label">Verdict</span>
+                    </div>
+                </div>
+
+                <!-- Detection list -->
+                <h3>Detections</h3>
+                <div id="detection-list" class="detection-list">
+                    <p class="placeholder-text">No detections yet</p>
+                </div>
+
+                <!-- Recent results feed -->
+                <h3>Recent Results</h3>
+                <div id="results-feed" class="results-feed"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Statistics Tab -->
+    <section id="tab-stats" class="tab-content">
+        <div class="stats-grid">
+            <div class="card stat-card">
+                <h3>Total Inspections</h3>
+                <span class="stat-value" id="stat-total">--</span>
+            </div>
+            <div class="card stat-card stat-ok">
+                <h3>OK</h3>
+                <span class="stat-value" id="stat-ok">--</span>
+                <span class="stat-sub" id="stat-ok-rate">--</span>
+            </div>
+            <div class="card stat-card stat-ng">
+                <h3>NG</h3>
+                <span class="stat-value" id="stat-ng">--</span>
+                <span class="stat-sub" id="stat-ng-rate">--</span>
+            </div>
+            <div class="card stat-card">
+                <h3>Avg Pipeline</h3>
+                <span class="stat-value" id="stat-pipeline">--</span>
+                <span class="stat-sub">ms</span>
+            </div>
+        </div>
+
+        <div class="charts-row">
+            <div class="card">
+                <h3>Defect Distribution</h3>
+                <div id="defect-chart" class="bar-chart"></div>
+            </div>
+            <div class="card">
+                <h3>Hourly Trend (24h)</h3>
+                <canvas id="trend-canvas" width="600" height="250"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <!-- Gallery Tab -->
+    <section id="tab-gallery" class="tab-content">
+        <div class="gallery-controls">
+            <select id="gallery-filter" onchange="loadGallery()">
+                <option value="">All Verdicts</option>
+                <option value="OK">OK Only</option>
+                <option value="NG">NG Only</option>
+            </select>
+            <button class="btn" onclick="loadGallery()">Refresh</button>
+        </div>
+        <div id="gallery-grid" class="gallery-grid"></div>
+    </section>
+
+    <!-- Image detail modal -->
+    <div id="modal" class="modal" onclick="closeModal(event)">
+        <div class="modal-content">
+            <button class="modal-close" onclick="document.getElementById('modal').classList.remove('active')">&times;</button>
+            <img id="modal-image" src="">
+            <canvas id="modal-canvas"></canvas>
+            <div id="modal-info" class="modal-info"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

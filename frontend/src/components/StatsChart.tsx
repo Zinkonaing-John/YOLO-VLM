@@ -2,8 +2,8 @@
 
 interface DailyDataPoint {
   date: string;
-  pass_count: number;
-  fail_count: number;
+  ok_count: number;
+  ng_count: number;
 }
 
 interface DefectDistItem {
@@ -36,16 +36,16 @@ function BarChart({ data }: { data: DailyDataPoint[] }) {
     );
   }
 
-  const maxVal = Math.max(...data.map((d) => d.pass_count + d.fail_count), 1);
+  const maxVal = Math.max(...data.map((d) => d.ok_count + d.ng_count), 1);
 
   return (
     <div className="space-y-3">
       <h4 className="text-sm font-semibold text-zinc-300">Daily Pass / Fail</h4>
       <div className="flex items-end gap-2 h-48">
         {data.map((point, i) => {
-          const total = point.pass_count + point.fail_count;
-          const passH = (point.pass_count / maxVal) * 100;
-          const failH = (point.fail_count / maxVal) * 100;
+          const total = point.ok_count + point.ng_count;
+          const passH = (point.ok_count / maxVal) * 100;
+          const failH = (point.ng_count / maxVal) * 100;
           const dayLabel = new Date(point.date).toLocaleDateString("en-US", {
             weekday: "short",
           });
@@ -54,18 +54,18 @@ function BarChart({ data }: { data: DailyDataPoint[] }) {
             <div key={i} className="flex-1 flex flex-col items-center gap-1">
               <span className="text-[10px] text-zinc-500 font-mono">{total}</span>
               <div className="w-full flex flex-col justify-end h-40 gap-0.5">
-                {point.fail_count > 0 && (
+                {point.ng_count > 0 && (
                   <div
                     className="w-full bg-red-500/80 rounded-t-sm transition-all duration-500"
                     style={{ height: `${failH}%` }}
-                    title={`Fail: ${point.fail_count}`}
+                    title={`Fail: ${point.ng_count}`}
                   />
                 )}
-                {point.pass_count > 0 && (
+                {point.ok_count > 0 && (
                   <div
                     className="w-full bg-emerald-500/80 rounded-t-sm transition-all duration-500"
                     style={{ height: `${passH}%` }}
-                    title={`Pass: ${point.pass_count}`}
+                    title={`Pass: ${point.ok_count}`}
                   />
                 )}
               </div>

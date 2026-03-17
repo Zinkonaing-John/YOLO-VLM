@@ -1,28 +1,24 @@
-"""Inspection router – upload images and retrieve results."""
+"""Inspection API — unified endpoints for all pipeline modes."""
 
 from __future__ import annotations
 
-import io
+import base64
 import logging
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import cv2
-import numpy as np
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from sqlalchemy import delete, select, func
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_session
+from app.core.model_registry import get_registry
 from app.models.db_models import Defect, Inspection
-from app.routers.auth import verify_api_key
 from app.services.inspection_service import (
-    InspectionResult,
+    PipelineMode,
     load_image,
     run_inspection,
     save_upload,
@@ -30,299 +26,225 @@ from app.services.inspection_service import (
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
-
 router = APIRouter(tags=["inspection"])
 
 
-# ── Pydantic response schemas ───────────────────────────────────────────────
+# ── POST /inspect ────────────────────────────────────────────────────────────
 
 
-class DefectSchema(BaseModel):
-    id: str
-    defect_class: str
-    confidence: float
-    bbox_x1: float
-    bbox_y1: float
-    bbox_x2: float
-    bbox_y2: float
-    clip_label: Optional[str] = None
-    clip_score: Optional[float] = None
-    is_defect: bool = False
-
-
-class InspectionSchema(BaseModel):
-    id: str
-    tenant_id: Optional[str] = None
-    timestamp: datetime
-    image_path: Optional[str] = None
-    image_url: Optional[str] = None
-    verdict: str
-    total_defects: int
-    processing_ms: Optional[float] = None
-    defects: list[DefectSchema] = []
-
-
-class InspectionListResponse(BaseModel):
-    total: int
-    page: int
-    page_size: int
-    items: list[InspectionSchema]
-
-
-class InspectResponse(BaseModel):
-    inspection_id: str
-    verdict: str
-    total_defects: int
-    processing_ms: float
-    detections: list[dict[str, Any]]
-    image_path: str
-    image_url: Optional[str] = None
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _make_image_url(image_path: str | None) -> str | None:
-    """Convert a filesystem path like 'uploads/abc_img.jpg' to '/uploads/abc_img.jpg'."""
-    if not image_path:
-        return None
-    filename = Path(image_path).name
-    return f"/uploads/{filename}"
-
-
-def _inspection_to_schema(insp: Inspection) -> InspectionSchema:
-    return InspectionSchema(
-        id=str(insp.id),
-        tenant_id=str(insp.tenant_id) if insp.tenant_id else None,
-        timestamp=insp.timestamp or datetime.now(timezone.utc),
-        image_path=insp.image_path,
-        image_url=_make_image_url(insp.image_path),
-        verdict=insp.verdict,
-        total_defects=insp.total_defects,
-        processing_ms=insp.processing_ms,
-        defects=[
-            DefectSchema(
-                id=str(d.id),
-                defect_class=d.defect_class,
-                confidence=d.confidence,
-                bbox_x1=d.bbox_x1,
-                bbox_y1=d.bbox_y1,
-                bbox_x2=d.bbox_x2,
-                bbox_y2=d.bbox_y2,
-                clip_label=d.clip_label,
-                clip_score=d.clip_score,
-                is_defect=d.is_defect,
-            )
-            for d in (insp.defects or [])
-        ],
-    )
-
-
-# ── Routes ───────────────────────────────────────────────────────────────────
-
-
-@router.post("/inspect", response_model=InspectResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/inspect")
 async def inspect_image(
-    file: UploadFile = File(..., description="Image to inspect"),
-    tenant_id: Optional[str] = Query(None, description="Tenant UUID"),
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-) -> InspectResponse:
-    """Upload an image for AI-powered quality inspection.
+    file: UploadFile = File(...),
+    pipeline: PipelineMode = Form("yolo_clip"),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Upload an image and run the specified inspection pipeline.
 
-    Pipeline: YOLO detect → Crop ROI → CLIP classify → OK/NG → Save to DB.
+    Pipeline modes:
+      - ``yolo_clip``: YOLO detection + CLIP per-ROI classification
+      - ``cnn``: ResNet full-image binary OK/NG classification
+      - ``ensemble``: Both pipelines vote; any NG -> final NG
     """
     contents = await file.read()
     if not contents:
-        raise HTTPException(status_code=400, detail="Empty file upload")
+        raise HTTPException(status_code=400, detail="Empty file")
 
-    filename = file.filename or "image.jpg"
-    image_path = save_upload(contents, filename)
+    image_path = save_upload(contents, file.filename or "upload.jpg")
+    image = load_image(image_path)
 
-    try:
-        image = load_image(image_path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    registry = get_registry()
 
-    from app.main import app_state
-
-    detector = app_state["detector"]
-    clip_classifier = app_state["clip_classifier"]
-
-    tid = uuid.UUID(tenant_id) if tenant_id else None
-
-    result: InspectionResult = await run_inspection(
+    result = await run_inspection(
         image=image,
         image_path=image_path,
-        detector=detector,
-        clip_classifier=clip_classifier,
         db=db,
-        tenant_id=tid,
+        detector=registry.yolo_defect,
+        clip_classifier=registry.clip,
+        resnet_classifier=registry.resnet,
+        pipeline=pipeline,
     )
 
     # Broadcast via WebSocket
-    try:
-        from app.main import ws_manager
-        await ws_manager.broadcast(result.to_dict())
-    except Exception:
-        logger.debug("WebSocket broadcast skipped (no active connections)")
+    from app.main import ws_manager
+    await ws_manager.broadcast(result.to_dict())
 
-    response_data = result.to_dict()
-    response_data["image_url"] = _make_image_url(response_data.get("image_path"))
-    return InspectResponse(**response_data)
+    await db.commit()
+    return result.to_dict()
 
 
-@router.get("/inspections", response_model=InspectionListResponse)
+# ── GET /inspections ─────────────────────────────────────────────────────────
+
+
+@router.get("/inspections")
 async def list_inspections(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    verdict: Optional[str] = Query(None, regex="^(OK|NG)$"),
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-) -> InspectionListResponse:
-    """List recent inspections with pagination and optional verdict filter."""
-    query = select(Inspection).order_by(Inspection.timestamp.desc())
-    count_query = select(func.count(Inspection.id))
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    verdict: str | None = Query(None),
+    pipeline: str | None = Query(None),
+    defect_class: str | None = Query(None),
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Paginated inspection history with filtering."""
+    query = select(Inspection).options(selectinload(Inspection.defects))
 
     if verdict:
-        query = query.where(Inspection.verdict == verdict)
-        count_query = count_query.where(Inspection.verdict == verdict)
+        query = query.where(Inspection.verdict == verdict.upper())
+    if pipeline:
+        query = query.where(Inspection.pipeline == pipeline)
+    if defect_class:
+        query = query.join(Inspection.defects).where(Defect.defect_class == defect_class)
 
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+    count_query = select(func.count(Inspection.id))
+    if verdict:
+        count_query = count_query.where(Inspection.verdict == verdict.upper())
+    if pipeline:
+        count_query = count_query.where(Inspection.pipeline == pipeline)
+    total = (await db.execute(count_query)).scalar() or 0
 
-    offset = (page - 1) * page_size
-    query = query.offset(offset).limit(page_size)
-    result = await db.execute(query)
-    inspections = result.scalars().all()
+    query = query.order_by(Inspection.timestamp.desc()).offset(offset).limit(limit)
+    rows = (await db.execute(query)).unique().scalars().all()
 
-    return InspectionListResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
-        items=[_inspection_to_schema(i) for i in inspections],
-    )
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "inspections": [_serialize_inspection(r) for r in rows],
+    }
 
 
-@router.get("/inspections/{inspection_id}", response_model=InspectionSchema)
+# ── GET /inspections/{id} ───────────────────────────────────────────────────
+
+
+@router.get("/inspections/{inspection_id}")
 async def get_inspection(
-    inspection_id: str,
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-) -> InspectionSchema:
-    """Get a single inspection by ID."""
-    try:
-        uid = uuid.UUID(inspection_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
-
-    result = await db.execute(
-        select(Inspection).where(Inspection.id == uid)
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    query = (
+        select(Inspection)
+        .options(selectinload(Inspection.defects))
+        .where(Inspection.id == inspection_id)
     )
-    inspection = result.scalar_one_or_none()
-    if inspection is None:
+    row = (await db.execute(query)).unique().scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    return _serialize_inspection(row)
+
+
+# ── GET /inspections/{id}/gradcam ────────────────────────────────────────────
+
+
+@router.get("/inspections/{inspection_id}/gradcam")
+async def get_gradcam(
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Generate GradCAM heatmap from ResNet classifier (on-demand)."""
+    row = (await db.execute(
+        select(Inspection).where(Inspection.id == inspection_id)
+    )).scalar_one_or_none()
+    if row is None:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
-    return _inspection_to_schema(inspection)
+    registry = get_registry()
+    if registry.resnet is None or not registry.resnet.is_loaded:
+        raise HTTPException(status_code=503, detail="ResNet classifier not loaded")
+
+    image = load_image(row.image_path)
+    heatmap = registry.resnet.get_cam_heatmap(image)
+    if heatmap is None:
+        raise HTTPException(status_code=500, detail="GradCAM generation failed")
+
+    _, heatmap_png = cv2.imencode(".png", heatmap)
+    return {
+        "inspection_id": str(inspection_id),
+        "gradcam_base64": base64.b64encode(heatmap_png.tobytes()).decode(),
+    }
 
 
-@router.get("/inspections/{inspection_id}/heatmap")
-async def get_heatmap(
-    inspection_id: str,
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-):
-    """Generate and return an anomaly heatmap image for this inspection."""
-    try:
-        uid = uuid.UUID(inspection_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
+# ── GET /inspections/{id}/segmentation ───────────────────────────────────────
 
-    result = await db.execute(select(Inspection).where(Inspection.id == uid))
-    inspection = result.scalar_one_or_none()
-    if inspection is None:
+
+@router.get("/inspections/{inspection_id}/segmentation")
+async def get_segmentation(
+    inspection_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    """Run YOLOv8-seg and return mask overlay (on-demand)."""
+    row = (await db.execute(
+        select(Inspection).where(Inspection.id == inspection_id)
+    )).scalar_one_or_none()
+    if row is None:
         raise HTTPException(status_code=404, detail="Inspection not found")
 
-    if not inspection.image_path:
-        raise HTTPException(status_code=404, detail="No image stored for this inspection")
+    registry = get_registry()
+    if registry.yolo_seg is None or not registry.yolo_seg.is_loaded:
+        raise HTTPException(status_code=503, detail="YOLO segmentor not loaded")
 
-    from app.main import app_state
-    simplenet = app_state.get("simplenet")
-    if simplenet is None:
-        raise HTTPException(status_code=503, detail="SimpleNet model not loaded")
+    image = load_image(row.image_path)
+    segments = registry.yolo_seg.segment(image, conf=settings.YOLO_SEG_CONFIDENCE)
+    mask_rgba = registry.yolo_seg.render_mask(image, segments)
+    _, mask_png = cv2.imencode(".png", mask_rgba)
 
-    image = load_image(inspection.image_path)
-    anomaly = simplenet.predict(image)
-
-    # Encode heatmap as PNG
-    _, buf = cv2.imencode(".png", anomaly.heatmap)
-    return StreamingResponse(
-        io.BytesIO(buf.tobytes()),
-        media_type="image/png",
-        headers={"X-Anomaly-Score": str(round(anomaly.score, 4))},
-    )
+    return {
+        "inspection_id": str(inspection_id),
+        "segments": [s.to_dict() for s in segments],
+        "mask_base64": base64.b64encode(mask_png.tobytes()).decode(),
+    }
 
 
-@router.get("/inspections/{inspection_id}/clip-details")
-async def get_clip_details(
-    inspection_id: str,
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-):
-    """Run CLIP classification on each detection ROI and return detailed results."""
-    try:
-        uid = uuid.UUID(inspection_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid UUID format")
-
-    result = await db.execute(select(Inspection).where(Inspection.id == uid))
-    inspection = result.scalar_one_or_none()
-    if inspection is None:
-        raise HTTPException(status_code=404, detail="Inspection not found")
-
-    if not inspection.image_path:
-        raise HTTPException(status_code=404, detail="No image stored")
-
-    from app.main import app_state
-    clip_classifier = app_state.get("clip_classifier")
-    if not clip_classifier or not clip_classifier.is_loaded:
-        raise HTTPException(status_code=503, detail="CLIP model not loaded")
-
-    image = load_image(inspection.image_path)
-    h, w = image.shape[:2]
-
-    details = []
-    for defect in (inspection.defects or []):
-        px1 = max(0, int(defect.bbox_x1 * w))
-        py1 = max(0, int(defect.bbox_y1 * h))
-        px2 = min(w, int(defect.bbox_x2 * w))
-        py2 = min(h, int(defect.bbox_y2 * h))
-        roi = image[py1:py2, px1:px2]
-
-        if roi.size == 0:
-            continue
-
-        clip_result = clip_classifier.classify(roi)
-        details.append({
-            "defect_id": str(defect.id),
-            "defect_class": defect.defect_class,
-            "confidence": round(defect.confidence, 4),
-            "bbox": [defect.bbox_x1, defect.bbox_y1, defect.bbox_x2, defect.bbox_y2],
-            "clip_label": clip_result.label,
-            "clip_score": round(clip_result.score, 4),
-            "is_defect": clip_result.is_defect,
-        })
-
-    return {"inspection_id": inspection_id, "clip_details": details}
+# ── DELETE /inspections ──────────────────────────────────────────────────────
 
 
-@router.delete("/inspections", status_code=status.HTTP_200_OK)
-async def delete_all_inspections(
-    db: AsyncSession = Depends(get_db),
-    _key: str = Depends(verify_api_key),
-) -> dict:
-    """Delete all inspections and their defects (demo/reset use)."""
+@router.delete("/inspections")
+async def delete_inspections(
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
     await db.execute(delete(Defect))
-    result = await db.execute(delete(Inspection))
+    await db.execute(delete(Inspection))
     await db.commit()
-    return {"deleted": result.rowcount}
+    return {"status": "deleted"}
+
+
+# ── GET /defect-classes ──────────────────────────────────────────────────────
+
+
+@router.get("/defect-classes")
+async def list_defect_classes(
+    db: AsyncSession = Depends(get_session),
+) -> list[str]:
+    result = await db.execute(
+        select(Defect.defect_class).where(Defect.is_defect.is_(True)).distinct()
+    )
+    return [row[0] for row in result.all() if row[0]]
+
+
+# ── Serialization ────────────────────────────────────────────────────────────
+
+
+def _serialize_inspection(row: Inspection) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        "image_path": row.image_path,
+        "verdict": row.verdict,
+        "total_defects": row.total_defects,
+        "processing_ms": round(row.processing_ms, 2) if row.processing_ms else 0,
+        "pipeline": row.pipeline,
+        "defects": [
+            {
+                "id": str(d.id),
+                "defect_class": d.defect_class,
+                "confidence": round(d.confidence, 4) if d.confidence else 0,
+                "bbox_x1": d.bbox_x1,
+                "bbox_y1": d.bbox_y1,
+                "bbox_x2": d.bbox_x2,
+                "bbox_y2": d.bbox_y2,
+                "detection_type": d.detection_type,
+                "clip_label": d.clip_label,
+                "clip_score": round(d.clip_score, 4) if d.clip_score else None,
+                "is_defect": d.is_defect,
+            }
+            for d in (row.defects or [])
+        ],
+    }

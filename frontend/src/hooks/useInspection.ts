@@ -9,6 +9,7 @@ export interface Defect {
   bbox_y1: number;
   bbox_x2: number;
   bbox_y2: number;
+  detection_type?: "object" | "defect";
   clip_label?: string;
   clip_score?: number;
   is_defect?: boolean;
@@ -23,6 +24,7 @@ export interface InspectionResult {
   image_path?: string;
   image_url?: string;
   total_defects: number;
+  pipeline?: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -74,6 +76,7 @@ export function useInspection() {
             defects: raw.defects ?? raw.detections ?? [],
             processing_ms: raw.processing_ms ?? 0,
             total_defects: raw.total_defects ?? 0,
+            pipeline: raw.pipeline,
             image_path: raw.image_path,
             image_url: raw.image_url,
           };

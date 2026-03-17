@@ -19,20 +19,21 @@ class Settings(BaseSettings):
 
     # ── App ──────────────────────────────────────────────────────────────
     APP_TITLE: str = "Industrial AI Vision API"
-    APP_VERSION: str = "2.0.0"
+    APP_VERSION: str = "3.0.0"
     DEBUG: bool = False
 
     # ── Database ─────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://user:pass@localhost/aiinspect"
 
-    # ── Redis ────────────────────────────────────────────────────────────
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # ── YOLO Defect Detection ────────────────────────────────────────────
+    YOLO_DEFECT_WEIGHTS_PATH: str = "weights/best.pt"
+    YOLO_DEFECT_CONFIDENCE: float = 0.15
 
-    # ── AI / Model paths ─────────────────────────────────────────────────
-    YOLO_WEIGHTS_PATH: str = "yolov8m.pt"
-    YOLO_CONFIDENCE: float = 0.20
+    # ── YOLO Segmentation ────────────────────────────────────────────────
+    YOLO_SEG_WEIGHTS_PATH: str = "yolov8n-seg.pt"
+    YOLO_SEG_CONFIDENCE: float = 0.25
 
-    # ── CLIP defect classification ───────────────────────────────────────
+    # ── CLIP Classification ──────────────────────────────────────────────
     CLIP_MODEL_NAME: str = "ViT-B/32"
     CLIP_DEFECT_THRESHOLD: float = 0.5
     CLIP_LABELS_OK: list[str] = [
@@ -49,8 +50,15 @@ class Settings(BaseSettings):
         "a photo of a metal surface with rolled-in scale",
     ]
 
+    # ── CNN / ResNet Classification ──────────────────────────────────────
+    CNN_RESNET_WEIGHTS_PATH: str = "weights/resnet_classifier.pth"
+    CNN_RESNET_ARCH: str = "resnet18"
+    CNN_RESNET_NUM_CLASSES: int = 2
+    CNN_RESNET_CLASS_NAMES: list[str] = ["OK", "NG"]
+    CNN_RESNET_THRESHOLD: float = 0.5
+
     # ── Auth ─────────────────────────────────────────────────────────────
-    API_KEY: Optional[str] = None  # None = auth disabled
+    API_KEY: Optional[str] = None
     API_KEY_HEADER: str = "X-API-Key"
 
     # ── Storage ──────────────────────────────────────────────────────────

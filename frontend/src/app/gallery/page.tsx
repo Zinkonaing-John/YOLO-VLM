@@ -8,7 +8,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const PAGE_SIZE = 20;
 
 type VerdictFilter = "ALL" | "OK" | "NG";
-type DetailTab = "original" | "heatmap" | "clip";
+type DetailTab = "original" | "clip" | "segmentation";
 
 function getContainedRect(cW: number, cH: number, nW: number, nH: number) {
   const cAR = cW / cH;
@@ -23,13 +23,11 @@ function getContainedRect(cW: number, cH: number, nW: number, nH: number) {
 }
 
 interface ClipDetail {
-  defect_id: string;
   defect_class: string;
-  confidence: number;
-  bbox: [number, number, number, number];
   clip_label: string;
   clip_score: number;
   is_defect: boolean;
+  bbox: { x1: number; y1: number; x2: number; y2: number };
 }
 
 function InspectionDetailModal({
@@ -40,13 +38,13 @@ function InspectionDetailModal({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("original");
-  const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null);
-  const [heatmapLoading, setHeatmapLoading] = useState(false);
-  const [heatmapError, setHeatmapError] = useState<string | null>(null);
-  const [anomalyScore, setAnomalyScore] = useState<number | null>(null);
-  const [heatmapOpacity, setHeatmapOpacity] = useState(0.5);
   const [clipDetails, setClipDetails] = useState<ClipDetail[]>([]);
   const [clipLoading, setClipLoading] = useState(false);
+  const [segMaskUrl, setSegMaskUrl] = useState<string | null>(null);
+  const [segLoading, setSegLoading] = useState(false);
+  const [segError, setSegError] = useState<string | null>(null);
+  const [segResults, setSegResults] = useState<any[]>([]);
+  const [segOpacity, setSegOpacity] = useState(0.6);
   const [highlightIdx, setHighlightIdx] = useState<number | null>(null);
   const imgContainerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{ offsetX: number; offsetY: number; width: number; height: number } | null>(null);
@@ -68,52 +66,56 @@ function InspectionDetailModal({
       : `${API_URL}${result.image_url}`
     : null;
 
-  // Fetch heatmap when tab switches
+  // Build CLIP details from already-cached defect data (no re-computation)
   useEffect(() => {
-    if (tab === "heatmap" && !heatmapUrl && !heatmapLoading && result.id) {
-      setHeatmapLoading(true);
-      setHeatmapError(null);
-      fetch(`${API_URL}/inspections/${result.id}/heatmap`)
+    if (tab === "clip" && clipDetails.length === 0 && result.defects?.length > 0) {
+      const details = result.defects
+        .filter((d: any) => d.clip_label)
+        .map((d: any) => ({
+          defect_class: d.defect_class,
+          clip_label: d.clip_label,
+          clip_score: d.clip_score ?? 0,
+          is_defect: d.is_defect ?? false,
+          bbox: { x1: d.bbox_x1, y1: d.bbox_y1, x2: d.bbox_x2, y2: d.bbox_y2 },
+        }));
+      setClipDetails(details);
+    }
+  }, [tab, clipDetails.length, result.defects]);
+
+  // Fetch segmentation when tab switches
+  useEffect(() => {
+    if (tab === "segmentation" && !segMaskUrl && !segLoading && result.id) {
+      setSegLoading(true);
+      setSegError(null);
+      fetch(`${API_URL}/inspections/${result.id}/segmentation`)
         .then(async (res) => {
           if (!res.ok) {
             const detail = await res.json().catch(() => ({}));
             throw new Error(detail.detail || `Error ${res.status}`);
           }
-          const score = res.headers.get("X-Anomaly-Score");
-          if (score) setAnomalyScore(parseFloat(score));
-          const blob = await res.blob();
-          setHeatmapUrl(URL.createObjectURL(blob));
-        })
-        .catch((err) => setHeatmapError(err.message))
-        .finally(() => setHeatmapLoading(false));
-    }
-  }, [tab, heatmapUrl, heatmapLoading, result.id]);
-
-  // Fetch CLIP details when tab switches
-  useEffect(() => {
-    if (tab === "clip" && clipDetails.length === 0 && !clipLoading && result.id) {
-      setClipLoading(true);
-      fetch(`${API_URL}/inspections/${result.id}/clip-details`)
-        .then(async (res) => {
-          if (!res.ok) throw new Error(`Error ${res.status}`);
           const data = await res.json();
-          setClipDetails(data.clip_details ?? []);
+          if (data.segments) {
+            setSegResults(data.segments);
+          }
+          if (data.mask_base64) {
+            setSegMaskUrl(`data:image/png;base64,${data.mask_base64}`);
+          }
         })
-        .catch(() => setClipDetails([]))
-        .finally(() => setClipLoading(false));
+        .catch((err) => setSegError(err.message))
+        .finally(() => setSegLoading(false));
     }
-  }, [tab, clipDetails.length, clipLoading, result.id]);
+  }, [tab, segMaskUrl, segLoading, result.id]);
 
-  // Cleanup blob URL
+  // Cleanup blob URLs
   useEffect(() => {
     return () => {
-      if (heatmapUrl) URL.revokeObjectURL(heatmapUrl);
+      if (segMaskUrl) URL.revokeObjectURL(segMaskUrl);
     };
-  }, [heatmapUrl]);
+  }, [segMaskUrl]);
 
   const tabs: { key: DetailTab; label: string }[] = [
     { key: "original", label: "Detections" },
-    { key: "heatmap", label: "Heatmap" },
+    { key: "segmentation", label: "Segmentation" },
     { key: "clip", label: "CLIP Analysis" },
   ];
 
@@ -180,7 +182,8 @@ function InspectionDetailModal({
                 const y2 = defect.bbox_y2 ?? 0;
                 if (!x2 && !y2) return null;
                 const isHighlight = highlightIdx === i;
-                const color = defect.is_defect ? "border-red-500" : "border-emerald-500";
+                const isDefectType = defect.detection_type === "defect";
+                const color = isDefectType ? "border-red-500" : "border-emerald-500";
                 return (
                   <div
                     key={i}
@@ -196,7 +199,7 @@ function InspectionDetailModal({
                   >
                     <span
                       className={`absolute -top-5 left-0 text-[9px] font-semibold ${
-                        defect.is_defect ? "bg-red-500" : "bg-emerald-500"
+                        isDefectType ? "bg-red-500" : "bg-emerald-500"
                       } text-white px-1.5 py-0.5 rounded whitespace-nowrap`}
                     >
                       {defect.defect_class} {(defect.confidence * 100).toFixed(0)}%
@@ -220,8 +223,13 @@ function InspectionDetailModal({
                     onMouseLeave={() => setHighlightIdx(null)}
                   >
                     <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${defect.is_defect ? "bg-red-500" : "bg-emerald-500"}`} />
+                      <div className={`w-2 h-2 rounded-full ${defect.detection_type === "defect" ? "bg-red-500" : "bg-emerald-500"}`} />
                       <span className="text-sm text-zinc-200">{defect.defect_class}</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                        defect.detection_type === "defect" ? "bg-red-500/20 text-red-400" : "bg-emerald-500/20 text-emerald-400"
+                      }`}>
+                        {defect.detection_type === "defect" ? "DEFECT" : "OBJECT"}
+                      </span>
                     </div>
                     <div className="flex items-center gap-3 text-xs text-zinc-400 font-mono">
                       {defect.clip_label && (
@@ -238,76 +246,6 @@ function InspectionDetailModal({
           </div>
         )}
 
-        {tab === "heatmap" && (
-          <div>
-            {/* Heatmap overlay on original */}
-            <div className="relative w-full aspect-video bg-zinc-800 rounded-lg mb-4 overflow-hidden">
-              {imageUrl && (
-                <img src={imageUrl} alt="Original" className="absolute inset-0 w-full h-full object-contain bg-black" />
-              )}
-              {heatmapLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                  <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              )}
-              {heatmapError && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                  <p className="text-sm text-red-400">{heatmapError}</p>
-                </div>
-              )}
-              {heatmapUrl && (
-                <img
-                  src={heatmapUrl}
-                  alt="Anomaly heatmap"
-                  className="absolute inset-0 w-full h-full object-contain mix-blend-screen"
-                  style={{ opacity: heatmapOpacity }}
-                />
-              )}
-            </div>
-
-            {/* Controls */}
-            <div className="space-y-3">
-              {anomalyScore != null && (
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-zinc-500 uppercase tracking-wider">Anomaly Score</span>
-                  <span
-                    className={`text-sm font-mono font-bold ${
-                      anomalyScore >= 0.5 ? "text-red-400" : anomalyScore >= 0.3 ? "text-amber-400" : "text-emerald-400"
-                    }`}
-                  >
-                    {anomalyScore.toFixed(4)}
-                  </span>
-                </div>
-              )}
-
-              {heatmapUrl && (
-                <>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-zinc-500 w-16">Overlay</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={heatmapOpacity}
-                      onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
-                      className="flex-1 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                    />
-                    <span className="text-xs text-zinc-400 w-10 text-right">
-                      {Math.round(heatmapOpacity * 100)}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-zinc-500">Normal</span>
-                    <div className="flex-1 h-2 rounded-full bg-gradient-to-r from-blue-600 via-green-500 via-yellow-400 to-red-500" />
-                    <span className="text-[10px] text-zinc-500">Anomalous</span>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
         {tab === "clip" && (
           <div>
             {/* Image with boxes for context */}
@@ -316,7 +254,7 @@ function InspectionDetailModal({
                 <img src={imageUrl} alt="Original" className="w-full h-full object-contain" onLoad={handleImgLoad} />
               )}
               {imgRect && clipDetails.map((cd, i) => {
-                const [x1, y1, x2, y2] = cd.bbox;
+                const { x1, y1, x2, y2 } = cd.bbox;
                 const isHighlight = highlightIdx === i;
                 return (
                   <div
@@ -392,13 +330,92 @@ function InspectionDetailModal({
           </div>
         )}
 
+        {tab === "segmentation" && (
+          <div>
+            {/* Segmentation mask overlay on original */}
+            <div className="relative w-full aspect-video bg-zinc-800 rounded-lg mb-4 overflow-hidden">
+              {imageUrl && (
+                <img src={imageUrl} alt="Original" className="absolute inset-0 w-full h-full object-contain bg-black" />
+              )}
+              {segLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                  <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {segError && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                  <p className="text-sm text-red-400">{segError}</p>
+                </div>
+              )}
+              {segMaskUrl && (
+                <img
+                  src={segMaskUrl}
+                  alt="Segmentation mask"
+                  className="absolute inset-0 w-full h-full object-contain"
+                  style={{ opacity: segOpacity }}
+                />
+              )}
+            </div>
+
+            {/* Controls */}
+            <div className="space-y-3">
+              {segMaskUrl && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-zinc-500 w-16">Overlay</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={segOpacity}
+                    onChange={(e) => setSegOpacity(parseFloat(e.target.value))}
+                    className="flex-1 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <span className="text-xs text-zinc-400 w-10 text-right">
+                    {Math.round(segOpacity * 100)}%
+                  </span>
+                </div>
+              )}
+
+              {/* Segmented instances list */}
+              {segResults.length > 0 && (
+                <div className="space-y-1.5">
+                  <h4 className="text-xs font-semibold text-zinc-400 uppercase">
+                    Segmented Instances ({segResults.length})
+                  </h4>
+                  {segResults.map((seg: any, i: number) => {
+                    const color = "#FF0000";
+                    return (
+                      <div key={i} className="flex items-center justify-between p-2 bg-zinc-800 rounded-lg border border-zinc-700">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: color }} />
+                          <span className="text-sm text-zinc-200">{seg.defect_class}</span>
+                        </div>
+                        <span className="text-xs text-zinc-400 font-mono">
+                          {(seg.confidence * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!segLoading && segResults.length === 0 && !segError && segMaskUrl && (
+                <p className="text-sm text-zinc-500 text-center py-2">
+                  No segments detected
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-zinc-800">
           <span className="text-xs text-zinc-500">
             {processingTimeMs.toFixed(0)}ms | {new Date(result.timestamp).toLocaleString()}
           </span>
           <span className="text-xs text-zinc-600 font-mono">
-            {allDetections.length} detection{allDetections.length !== 1 ? "s" : ""}
+            {allDetections.filter(d => d.detection_type === "object").length} obj · {allDetections.filter(d => d.detection_type === "defect").length} defects
           </span>
         </div>
       </div>
@@ -430,15 +447,21 @@ export default function GalleryPage() {
       const res = await fetch(`${API_URL}/inspections?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        const items: InspectionResult[] = Array.isArray(data) ? data : data.items || [];
+        const raw = Array.isArray(data) ? data : data.inspections || data.items || [];
+        const items: InspectionResult[] = raw.map((r: any) => ({
+          ...r,
+          id: r.id ?? r.inspection_id ?? "",
+          timestamp: r.timestamp ?? new Date().toISOString(),
+          defects: r.defects ?? r.detections ?? [],
+          image_url: r.image_url ?? (r.image_path ? `${API_URL}/uploads/${r.image_path.split("/").pop()}` : undefined),
+        }));
         setResults(items);
         setHasMore(items.length === PAGE_SIZE);
 
         const classes = new Set<string>();
         items.forEach((item) =>
           (item.defects ?? [])
-            .filter((d) => d.is_defect)
-            .forEach((d) => classes.add(d.clip_label ?? d.defect_class))
+            .forEach((d) => classes.add(d.defect_class))
         );
         setAllClasses((prev) => {
           const combined = new Set([...prev, ...classes]);
@@ -465,7 +488,7 @@ export default function GalleryPage() {
       ? results
       : results.filter((r) =>
           (r.defects ?? []).some(
-            (d) => d.is_defect && (d.clip_label ?? d.defect_class) === classFilter
+            (d) => d.defect_class === classFilter
           )
         );
 
@@ -473,7 +496,7 @@ export default function GalleryPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-xl font-bold text-zinc-100">Defect Gallery</h2>
+          <h2 className="text-xl font-bold text-zinc-100">Inspection Gallery</h2>
           <p className="text-sm text-zinc-500 mt-1">
             Browse and filter inspection results
           </p>

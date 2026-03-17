@@ -58,6 +58,7 @@ class DailyStatisticsResponse(BaseModel):
 @router.get("", response_model=OverallStatistics)
 async def get_statistics(
     tenant_id: Optional[str] = Query(None),
+    pipeline: Optional[str] = Query(None, description="Filter by pipeline: yolo_clip or cnn_resnet"),
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> OverallStatistics:
@@ -71,6 +72,8 @@ async def get_statistics(
     )
     if tenant_id:
         agg_q = agg_q.where(Inspection.tenant_id == tenant_id)
+    if pipeline:
+        agg_q = agg_q.where(Inspection.pipeline == pipeline)
 
     row = (await db.execute(agg_q)).one()
     total = row.total or 0
@@ -80,10 +83,14 @@ async def get_statistics(
     ok_rate = (ok_count / total * 100.0) if total > 0 else 0.0
     ng_rate = (ng_count / total * 100.0) if total > 0 else 0.0
 
-    # Total defects (only ROIs classified as defect by CLIP)
-    defect_count_q = select(func.count(Defect.id)).where(Defect.is_defect == True)
-    if tenant_id:
-        defect_count_q = defect_count_q.join(Inspection).where(Inspection.tenant_id == tenant_id)
+    # Total defects
+    defect_count_q = select(func.count(Defect.id)).where(Defect.is_defect.is_(True))
+    if tenant_id or pipeline:
+        defect_count_q = defect_count_q.join(Inspection)
+        if tenant_id:
+            defect_count_q = defect_count_q.where(Inspection.tenant_id == tenant_id)
+        if pipeline:
+            defect_count_q = defect_count_q.where(Inspection.pipeline == pipeline)
     total_defects = (await db.execute(defect_count_q)).scalar() or 0
 
     # Defect type distribution
@@ -96,8 +103,12 @@ async def get_statistics(
         .group_by(Defect.clip_label)
         .order_by(func.count(Defect.id).desc())
     )
-    if tenant_id:
-        defect_q = defect_q.join(Inspection).where(Inspection.tenant_id == tenant_id)
+    if tenant_id or pipeline:
+        defect_q = defect_q.join(Inspection)
+        if tenant_id:
+            defect_q = defect_q.where(Inspection.tenant_id == tenant_id)
+        if pipeline:
+            defect_q = defect_q.where(Inspection.pipeline == pipeline)
 
     defect_rows = (await db.execute(defect_q)).all()
     distribution = [
@@ -120,6 +131,7 @@ async def get_statistics(
 async def get_daily_statistics(
     days: int = Query(30, ge=1, le=365),
     tenant_id: Optional[str] = Query(None),
+    pipeline: Optional[str] = Query(None, description="Filter by pipeline: yolo_clip or cnn_resnet"),
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(verify_api_key),
 ) -> DailyStatisticsResponse:
@@ -141,6 +153,8 @@ async def get_daily_statistics(
 
     if tenant_id:
         q = q.where(Inspection.tenant_id == tenant_id)
+    if pipeline:
+        q = q.where(Inspection.pipeline == pipeline)
 
     rows = (await db.execute(q)).all()
 

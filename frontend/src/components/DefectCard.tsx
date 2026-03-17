@@ -28,7 +28,7 @@ function downloadWithBoxes(src: string, defects: Defect[], filename: string) {
       const y1 = d.bbox_y1 * h;
       const bw = (d.bbox_x2 - d.bbox_x1) * w;
       const bh = (d.bbox_y2 - d.bbox_y1) * h;
-      const color = d.is_defect ? "#ef4444" : "#22c55e";
+      const color = d.detection_type === "defect" ? "#ef4444" : "#22c55e";
 
       // Box
       ctx.strokeStyle = color;
@@ -107,7 +107,9 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
       ? rawSrc
       : `${API_URL}${rawSrc}`
     : null;
-  const defects = (result.defects ?? []).filter((d) => d.is_defect);
+  const allDetections = result.defects ?? [];
+  const objects = allDetections.filter((d) => d.detection_type === "object");
+  const defects = allDetections.filter((d) => d.detection_type === "defect");
   const shortId = (result.id ?? "").slice(0, 8) || "--------";
   const formattedTime = timestamp.toLocaleString("en-US", {
     month: "short",
@@ -178,9 +180,9 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
 
         {/* Bounding box overlays — positioned within the actual image rect */}
         {imgRect &&
-          (result.defects ?? []).map((defect, i) => {
+          allDetections.map((defect, i) => {
             const { bbox_x1: x1, bbox_y1: y1, bbox_x2: x2, bbox_y2: y2 } = defect;
-            const isDefect = defect.is_defect;
+            const isDefect = defect.detection_type === "defect";
             const borderColor = isDefect
               ? "border-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]"
               : "border-emerald-500";
@@ -239,39 +241,46 @@ export default function DefectCard({ result, onClick }: DefectCardProps) {
           <span className="text-xs text-zinc-500">{formattedTime}</span>
         </div>
 
-        {/* Defects list */}
-        {defects.length > 0 ? (
+        {/* Detections list: defects first, then objects */}
+        {allDetections.length > 0 ? (
           <div className="space-y-1">
-            {defects.slice(0, 3).map((defect, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between text-xs"
-              >
-                <span className="text-zinc-300 truncate mr-2">
-                  {defect.defect_class}
+            {defects.slice(0, 2).map((d, i) => (
+              <div key={`d-${i}`} className="flex items-center justify-between text-xs">
+                <span className="text-red-400 truncate mr-2">
+                  {d.defect_class}
                 </span>
                 <span className="text-zinc-500 font-mono whitespace-nowrap">
-                  {(defect.confidence * 100).toFixed(1)}%
+                  {(d.confidence * 100).toFixed(1)}%
                 </span>
               </div>
             ))}
-            {defects.length > 3 && (
+            {objects.slice(0, defects.length > 0 ? 1 : 3).map((d, i) => (
+              <div key={`o-${i}`} className="flex items-center justify-between text-xs">
+                <span className="text-emerald-400 truncate mr-2">
+                  {d.defect_class}
+                </span>
+                <span className="text-zinc-500 font-mono whitespace-nowrap">
+                  {(d.confidence * 100).toFixed(1)}%
+                </span>
+              </div>
+            ))}
+            {allDetections.length > 3 && (
               <p className="text-[10px] text-zinc-600">
-                +{defects.length - 3} more defects
+                +{allDetections.length - 3} more
               </p>
             )}
           </div>
         ) : (
           <p className="text-xs text-zinc-500">
-            {isOK ? "No defects detected" : "NG – inspection failed"}
+            No detections
           </p>
         )}
 
-        {/* Processing time */}
+        {/* Processing time + counts */}
         <div className="flex items-center justify-between text-[10px] text-zinc-600">
           <span>{(result.processing_ms ?? 0).toFixed(0)}ms</span>
           <span className="font-mono">
-            {result.total_defects} defect{result.total_defects !== 1 ? "s" : ""}
+            {objects.length} obj · {defects.length} defect{defects.length !== 1 ? "s" : ""}
           </span>
         </div>
       </div>

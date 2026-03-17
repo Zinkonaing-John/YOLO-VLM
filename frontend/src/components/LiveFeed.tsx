@@ -41,10 +41,9 @@ function FeedItem({ result, isNew }: { result: InspectionResult; isNew: boolean 
         </div>
         <div className="flex items-center justify-between mt-0.5">
           <span className="text-[11px] text-zinc-500 truncate">
-            {result.vlm_response
-              ?? (defects.length > 0
-                ? `${defects.length} defect${defects.length > 1 ? "s" : ""}: ${defects.map((d) => d.defect_class).join(", ")}`
-                : isPassing ? "Clean - no defects" : "Failed inspection")}
+            {defects.length > 0
+              ? `${defects.filter(d => d.detection_type === "object").length} obj, ${defects.filter(d => d.detection_type === "defect").length} defects: ${defects.map((d) => d.defect_class).join(", ")}`
+              : isPassing ? "No detections" : "Failed inspection"}
           </span>
           <span className="text-[10px] text-zinc-600 ml-2 flex-shrink-0">{time}</span>
         </div>

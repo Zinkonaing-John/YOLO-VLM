@@ -51,6 +51,10 @@ def draw_results(
     display = frame.copy()
     h, w = display.shape[:2]
 
+    # Color coding: green=object, red=defect, orange=anomalous object
+    COLOR_OBJECT = (0, 255, 0)   # green
+    COLOR_DEFECT = (0, 0, 255)   # red
+
     # Draw bounding boxes
     for idx, det in enumerate(detections):
         x1 = int(det.bbox_x1)
@@ -58,10 +62,12 @@ def draw_results(
         x2 = int(det.bbox_x2)
         y2 = int(det.bbox_y2)
 
-        color = (0, 0, 255) if anomaly_scores.get(idx, 0) >= 0.5 else (0, 255, 0)
+        is_defect = getattr(det, "detection_type", "object") == "defect"
+        color = COLOR_DEFECT if is_defect or anomaly_scores.get(idx, 0) >= 0.5 else COLOR_OBJECT
         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
 
-        label = f"{det.defect_class} {det.confidence:.2f}"
+        tag = "[D]" if is_defect else "[O]"
+        label = f"{tag} {det.defect_class} {det.confidence:.2f}"
         if idx in anomaly_scores:
             label += f" anom:{anomaly_scores[idx]:.3f}"
 
@@ -114,17 +120,24 @@ def post_result_to_api(api_url: str, frame: np.ndarray, verdict: str, anomaly_sc
 def run_pipeline(
     source: str | int,
     yolo_weights: str,
+    object_weights: str,
     simplenet_weights: str | None,
     threshold: float,
     confidence: float,
+    object_confidence: float,
     display: bool,
     api_url: str | None,
 ) -> None:
-    """Main inference loop."""
+    """Main inference loop with dual YOLO detectors (objects + defects)."""
 
-    # Initialize models
+    # Initialize defect detector (custom-trained)
     detector = YOLODetector()
     detector.load_model(yolo_weights)
+
+    # Initialize object detector (pretrained COCO)
+    obj_detector = YOLODetector()
+    obj_detector.load_model(object_weights)
+    logger.info("Object detector loaded (loaded=%s)", obj_detector.is_loaded)
 
     anomaly_detector = AnomalyDetector()
     if simplenet_weights:
@@ -176,8 +189,17 @@ def run_pipeline(
                 frame_count = 0
                 fps_start = time.time()
 
-            # YOLO detection
-            detections = detector.detect(frame, conf=confidence)
+            # YOLO object detection (pretrained COCO)
+            object_detections = obj_detector.detect(
+                frame, conf=object_confidence, detection_type="object"
+            )
+
+            # YOLO defect detection (custom-trained)
+            defect_detections = detector.detect(
+                frame, conf=confidence, detection_type="defect"
+            )
+
+            detections = object_detections + defect_detections
 
             # SimpleNet anomaly detection
             overall_score = None
@@ -200,8 +222,8 @@ def run_pipeline(
                     result = anomaly_detector.predict(frame)
                     overall_score = result.score
 
-            # Decision
-            has_defects = len(detections) > 0
+            # Decision – verdict driven by defect detections only
+            has_defects = len(defect_detections) > 0
             has_anomaly = overall_score is not None and overall_score >= threshold
             verdict = "DEFECT" if (has_defects or has_anomaly) else "OK"
 
@@ -228,8 +250,9 @@ def run_pipeline(
             # Log defects
             if verdict == "DEFECT":
                 logger.info(
-                    "DEFECT detected — %d YOLO detections, anomaly=%.4f",
-                    len(detections),
+                    "DEFECT detected — %d objects, %d defects, anomaly=%.4f",
+                    len(object_detections),
+                    len(defect_detections),
                     overall_score or 0.0,
                 )
 
@@ -247,10 +270,12 @@ def run_pipeline(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Real-time YOLO + SimpleNet inference pipeline")
     parser.add_argument("--source", type=str, default="0", help="Camera source (index, RTSP URL, or video file)")
-    parser.add_argument("--yolo-weights", type=str, default="weights/best.pt", help="YOLO weights path")
+    parser.add_argument("--yolo-weights", type=str, default="weights/best.pt", help="YOLO defect weights path")
+    parser.add_argument("--object-weights", type=str, default="yolov8m.pt", help="YOLO object detection weights (pretrained COCO)")
     parser.add_argument("--simplenet-weights", type=str, default=None, help="SimpleNet weights path")
     parser.add_argument("--threshold", type=float, default=0.5, help="Anomaly score threshold")
-    parser.add_argument("--confidence", type=float, default=0.5, help="YOLO confidence threshold")
+    parser.add_argument("--confidence", type=float, default=0.5, help="YOLO defect confidence threshold")
+    parser.add_argument("--object-confidence", type=float, default=0.4, help="YOLO object confidence threshold")
     parser.add_argument("--display", action="store_true", help="Show live OpenCV window")
     parser.add_argument("--api-url", type=str, default=None, help="Backend API URL for posting results")
     args = parser.parse_args()
@@ -260,9 +285,11 @@ def main() -> None:
     run_pipeline(
         source=source,
         yolo_weights=args.yolo_weights,
+        object_weights=args.object_weights,
         simplenet_weights=args.simplenet_weights,
         threshold=args.threshold,
         confidence=args.confidence,
+        object_confidence=args.object_confidence,
         display=args.display,
         api_url=args.api_url,
     )

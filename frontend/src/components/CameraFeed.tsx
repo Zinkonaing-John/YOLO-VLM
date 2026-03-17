@@ -40,15 +40,13 @@ export default function CameraFeed() {
   const triggerStateRef = useRef<TriggerState>("waiting");
 
   const [active, setActive] = useState(false);
-  const [vlmEnabled, setVlmEnabled] = useState(false);
+  const pipeline = "ensemble";
   const [cameraReady, setCameraReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<InspectionResult | null>(null);
   const [processingMs, setProcessingMs] = useState<number | null>(null);
   const [triggerState, setTriggerState] = useState<TriggerState>("waiting");
   const [motionLevel, setMotionLevel] = useState(0);
-  const [prompt, setPrompt] = useState("");
-  const [vlmResponse, setVlmResponse] = useState<string | null>(null);
 
   // ROI selection state (normalized 0-1 coordinates)
   const [roi, setRoi] = useState<Roi | null>(null);
@@ -157,7 +155,6 @@ export default function CameraFeed() {
     setProcessingMs(null);
     setTriggerState("waiting");
     setMotionLevel(0);
-    setVlmResponse(null);
     busyRef.current = false;
     prevFrameRef.current = null;
     triggerStateRef.current = "waiting";
@@ -235,12 +232,9 @@ export default function CameraFeed() {
       const formData = new FormData();
       formData.append("file", blob, "frame.jpg");
 
+      formData.append("pipeline", pipeline);
       const t0 = performance.now();
-      const params = new URLSearchParams({ enable_vlm: String(vlmEnabled) });
-      if (prompt.trim()) {
-        params.set("prompt", prompt.trim());
-      }
-      const res = await fetch(`${API_URL}/inspect?${params}`, {
+      const res = await fetch(`${API_URL}/inspect`, {
         method: "POST",
         body: formData,
       });
@@ -255,7 +249,6 @@ export default function CameraFeed() {
         };
         setLastResult(result);
         setProcessingMs(performance.now() - t0);
-        setVlmResponse(data.vlm_response ?? null);
         drawOverlay(defects);
       }
     } catch {
@@ -268,7 +261,7 @@ export default function CameraFeed() {
       // Capture new baseline after inspection
       prevFrameRef.current = grabRoiFrame();
     }
-  }, [vlmEnabled, roi, prompt, grabRoiFrame]);
+  }, [roi, pipeline, grabRoiFrame]);
 
   const drawOverlay = useCallback((defects: Defect[]) => {
     const video = videoRef.current;
@@ -399,7 +392,6 @@ export default function CameraFeed() {
           triggerStateRef.current = "cooldown";
           setTriggerState("cooldown");
           setLastResult(null);
-          setVlmResponse(null);
           drawOverlay([]);
         }
       } else if (state === "cooldown") {
@@ -508,21 +500,6 @@ export default function CameraFeed() {
               )}
             </>
           )}
-          {/* VLM toggle */}
-          <button
-            onClick={() => setVlmEnabled((v) => !v)}
-            className={`
-              flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition-colors
-              ${vlmEnabled
-                ? "bg-blue-500/15 border-blue-500/40 text-blue-400"
-                : "bg-zinc-800 border-zinc-700 text-zinc-500"
-              }
-            `}
-            title={vlmEnabled ? "VLM on – slower" : "VLM off – faster"}
-          >
-            <div className={`w-1.5 h-1.5 rounded-full ${vlmEnabled ? "bg-blue-400" : "bg-zinc-600"}`} />
-            VLM
-          </button>
           {/* Start/Stop */}
           <button
             onClick={toggle}
@@ -662,40 +639,6 @@ export default function CameraFeed() {
         </div>
       )}
 
-      {/* Prompt box for specific detection */}
-      {active && (
-        <div className="mt-3 space-y-2">
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g. Is there any scratch on the surface?"
-              className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-blue-500/50 transition-colors"
-            />
-            {prompt && (
-              <button
-                onClick={() => { setPrompt(""); setVlmResponse(null); }}
-                className="text-zinc-500 hover:text-zinc-300 text-xs px-1"
-                title="Clear prompt"
-              >
-                x
-              </button>
-            )}
-          </div>
-          {prompt.trim() && (
-            <p className="text-[10px] text-zinc-600 px-1">
-              Prompt will be sent with next capture (VLM auto-enabled)
-            </p>
-          )}
-          {vlmResponse && (
-            <div className="p-2 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <p className="text-[11px] text-blue-300 font-medium mb-0.5">VLM Response</p>
-              <p className="text-xs text-zinc-300 leading-relaxed">{vlmResponse}</p>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

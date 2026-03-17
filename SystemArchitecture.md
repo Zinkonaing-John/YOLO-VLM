@@ -54,7 +54,7 @@ Input Image
     ├──────────────────────────┐
     ▼                          ▼
 ┌────────────────┐   ┌─────────────────────┐
-│  CLIP (ViT-B/32)│   │  YOLOv8 Detection   │
+│  CLIP (ViT-B/32)│   │  YOLOv8m Detection   │
 │  Full-Image     │   │  Object Localization │
 │  Classification  │   │  conf=0.25, iou=0.45│
 └───────┬────────┘   └─────────┬───────────┘

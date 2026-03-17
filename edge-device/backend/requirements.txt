@@ -1,0 +1,13 @@
+# Edge device Python dependencies — minimal footprint for Jetson
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+aiosqlite==0.20.0
+python-multipart==0.0.18
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+requests>=2.31.0
+paho-mqtt>=1.6.0
+
+# Install ultralytics separately — Jetson may need special torch/torchvision wheels
+# pip install ultralytics
+# See: https://docs.ultralytics.com/guides/nvidia-jetson/

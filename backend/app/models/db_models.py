@@ -48,6 +48,7 @@ class Inspection(Base):
     )
     total_defects = Column(Integer, default=0, nullable=False)
     processing_ms = Column(Float, nullable=True)
+    pipeline = Column(String(20), default="yolo_clip", nullable=False)
 
     # Relationships
     defects = relationship(
@@ -83,6 +84,7 @@ class Defect(Base):
     bbox_y1 = Column(Float, nullable=False)
     bbox_x2 = Column(Float, nullable=False)
     bbox_y2 = Column(Float, nullable=False)
+    detection_type = Column(String(10), default="object", nullable=False)  # "object" or "defect"
     clip_label = Column(String(100), nullable=True)
     clip_score = Column(Float, nullable=True)
     is_defect = Column(Boolean, default=False, nullable=False)

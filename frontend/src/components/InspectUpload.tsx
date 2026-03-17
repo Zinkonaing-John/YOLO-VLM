@@ -11,8 +11,7 @@ export default function InspectUpload() {
   const [result, setResult] = useState<InspectionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [vlmEnabled, setVlmEnabled] = useState(true);
-  const [prompt, setPrompt] = useState("");
+  const pipeline = "ensemble";
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
@@ -30,12 +29,8 @@ export default function InspectUpload() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const params = new URLSearchParams({ enable_vlm: String(vlmEnabled) });
-      if (prompt.trim()) {
-        params.set("prompt", prompt.trim());
-      }
-
-      const response = await fetch(`${API_URL}/inspect?${params}`, {
+      formData.append("pipeline", pipeline);
+      const response = await fetch(`${API_URL}/inspect`, {
         method: "POST",
         body: formData,
       });
@@ -58,7 +53,7 @@ export default function InspectUpload() {
     } finally {
       setIsLoading(false);
     }
-  }, [vlmEnabled, prompt]);
+  }, [pipeline]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -99,37 +94,7 @@ export default function InspectUpload() {
 
   return (
     <div className="card">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-zinc-200">Manual Inspection</h3>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setVlmEnabled((v) => !v);
-          }}
-          className={`
-            flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition-colors
-            ${vlmEnabled
-              ? "bg-blue-500/15 border-blue-500/40 text-blue-400"
-              : "bg-zinc-800 border-zinc-700 text-zinc-500"
-            }
-          `}
-          title={vlmEnabled ? "VLM enabled – click to disable for faster speed" : "VLM disabled – click to enable detailed analysis"}
-        >
-          <div className={`w-1.5 h-1.5 rounded-full ${vlmEnabled ? "bg-blue-400" : "bg-zinc-600"}`} />
-          VLM {vlmEnabled ? "ON" : "OFF"}
-        </button>
-      </div>
-
-      {/* Prompt input */}
-      <div className="mb-3">
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Ask something about the image... (e.g. &quot;Describe any defects you see&quot;)"
-          rows={2}
-          className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 resize-none"
-        />
-      </div>
+      <h3 className="text-sm font-semibold text-zinc-200 mb-3">Manual Inspection</h3>
 
       {/* Upload area */}
       <div
@@ -216,30 +181,19 @@ export default function InspectUpload() {
             <div className="space-y-1 mt-2">
               {defects.map((defect, i) => (
                 <div key={i} className="flex items-center justify-between text-xs">
-                  <span className="text-zinc-300">{defect.defect_class}</span>
+                  <span className={defect.detection_type === "defect" ? "text-red-400" : "text-emerald-400"}>
+                    {defect.defect_class}
+                  </span>
                   <span className="text-zinc-500 font-mono">
                     {(defect.confidence * 100).toFixed(1)}%
                   </span>
                 </div>
               ))}
-              {defects.some((d) => d.vlm_description) && (
-                <p className="text-[11px] text-zinc-400 mt-2 pt-2 border-t border-zinc-700">
-                  {defects.find((d) => d.vlm_description)?.vlm_description}
-                </p>
-              )}
             </div>
           ) : (
             <p className="text-xs text-zinc-400">
-              {result.vlm_response ?? (isPassing ? "No defects found" : "Failed inspection")}
+              {isPassing ? "No detections" : "Failed inspection"}
             </p>
-          )}
-
-          {/* VLM Prompt Response */}
-          {result.vlm_response && (
-            <div className="mt-2 pt-2 border-t border-zinc-700">
-              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">VLM Response</p>
-              <p className="text-xs text-zinc-300 whitespace-pre-wrap">{result.vlm_response}</p>
-            </div>
           )}
 
           <button

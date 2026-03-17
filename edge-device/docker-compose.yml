@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  edge-inspector:
+    build: .
+    runtime: nvidia
+    ports:
+      - "8000:8000"
+    devices:
+      - /dev/video0:/dev/video0  # USB camera
+    volumes:
+      - ./weights:/app/weights:ro
+      - edge-data:/app/data
+    environment:
+      - CAMERA_SOURCE=0
+      - DET_MODEL_PATH=/app/weights/best.engine
+      - CLS_MODEL_PATH=              # Set to /app/weights/cls_okng.engine for Stage 2
+      - DET_CONFIDENCE=0.5
+      - CLS_CONFIDENCE=0.5
+      - CAMERA_WIDTH=1280
+      - CAMERA_HEIGHT=720
+      - CAMERA_FPS=30
+      # Uncomment for CSI camera (e.g. Raspberry Pi Camera Module on Jetson)
+      # - USE_CSI=true
+      # - CSI_SENSOR_ID=0
+      # Uncomment for RTSP stream
+      # - CAMERA_SOURCE=rtsp://192.168.1.10/stream
+      # Uncomment to sync NG results to cloud backend
+      # - UPSTREAM_API_URL=http://server:8000/api/v1/edge-inspect
+      # Uncomment for MQTT
+      # - MQTT_BROKER=192.168.1.100
+    restart: unless-stopped
+
+  # Optional: local MQTT broker for PLC/SCADA integration
+  # mosquitto:
+  #   image: eclipse-mosquitto:2
+  #   ports:
+  #     - "1883:1883"
+  #   volumes:
+  #     - mosquitto-data:/mosquitto/data
+
+volumes:
+  edge-data:
+  # mosquitto-data:
