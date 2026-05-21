@@ -57,9 +57,15 @@ class CNNPipeline(BasePipeline):
         result = self._classifier.classify(image, threshold=threshold)
         elapsed = (time.perf_counter() - t0) * 1000
 
+        # overall_score must be the NG probability (0=clean, 1=defect) so the
+        # decision engine threshold comparison works correctly. result.confidence
+        # is the confidence of the *predicted* class (high for both OK and NG),
+        # which would cause the decision engine to flip OK predictions to NG.
+        ng_score = result.class_probabilities.get("NG", result.confidence if result.is_defect else 0.0)
+
         return PipelineResult(
             verdict=result.label,
-            overall_score=result.confidence,
+            overall_score=ng_score,
             threshold=threshold,
             detections=[{
                 "defect_label": f"cnn_{result.label.lower()}",
@@ -70,7 +76,7 @@ class CNNPipeline(BasePipeline):
             }],
             anomaly_scores=[{
                 "model_name": "resnet18",
-                "score": result.confidence,
+                "score": ng_score,
                 "threshold": threshold,
                 "passed": not result.is_defect,
             }],
