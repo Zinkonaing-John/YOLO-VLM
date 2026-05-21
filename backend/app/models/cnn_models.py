@@ -83,23 +83,20 @@ class ResNetClassifier:
                 state_dict = torch.load(weights_path, map_location=self._device, weights_only=True)
                 model.load_state_dict(state_dict)
                 logger.info("ResNet custom weights loaded from %s", weights_path)
+                model.to(self._device)
+                model.eval()
+                self._model = model
             else:
-                # Use pretrained ImageNet weights with modified classifier head
-                model = builder(weights="IMAGENET1K_V1")
-                in_features = model.fc.in_features
-                model.fc = torch.nn.Linear(in_features, num_classes)
+                # No custom weights — do not load. An untrained classification head
+                # produces random/biased results and is worse than no prediction.
                 if weights_path:
                     logger.warning(
-                        "ResNet weights not found at %s – using pretrained ImageNet backbone "
-                        "(classifier head is untrained, results may be unreliable until fine-tuned).",
+                        "ResNet weights not found at %s — CNN pipeline disabled until trained weights are provided.",
                         weights_path,
                     )
                 else:
-                    logger.info("ResNet loaded with pretrained ImageNet backbone (no custom weights)")
-
-            model.to(self._device)
-            model.eval()
-            self._model = model
+                    logger.info("No ResNet weights path provided — CNN pipeline disabled.")
+                return
 
             # Standard ImageNet preprocessing
             self._transform = T.Compose([
@@ -108,11 +105,8 @@ class ResNetClassifier:
                 T.ToTensor(),
                 T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ])
-
-            logger.info(
-                "ResNet classifier ready (%s, %d classes, device=%s)",
-                model_arch, num_classes, self._device,
-            )
+            logger.info("ResNet classifier ready (%s, %d classes, device=%s)",
+                        model_arch, num_classes, self._device)
         except Exception:
             logger.exception("Failed to load ResNet model")
             self._model = None
